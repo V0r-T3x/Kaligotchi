@@ -17,12 +17,21 @@ flask-wtf
 dbus-python
 toml
 python-dateutil
+python-prctl
 websockets
 jinja2==3.0.3
 matplotlib
 itsdangerous==1.1.0
 werkzeug==2.0.0
+# Neutralize Torch for your Kali branch (since you pre-install it)
+# torch>=2.0.1; platform_machine=="armv7l"  <-- Comment this out or remove it
+# torchvision>=0.15.2; platform_machine=="armv7l" <-- Comment this out
 
+# Ensure NumPy doesn't break
+numpy<2.0.0
+
+# Add the Kali-specific hardware fix
+rpi-lgpio
 
 # use these on 64-bit platforms for gym compatability
 # works on raspberry pi, orangepi zero 2w
@@ -41,7 +50,8 @@ stable_baselines3==1.8.0; platform_machine=="armv6l"
 # Bananapi version of RPi.GPIO
 #git+https://github.com/BPI-SINOVOIP/RPi.GPIO#egg=RPi.GPIO ; platform_release=="6.1.63"
 
-RPi.GPIO; platform_release=="6.1.21"
+RPi.GPIO; platform_release=="6.1.21"; platform_machine=="aarch64"
+RPi.GPIO; platform_release=="6.1.21"; platform_machine=="armv6l"
 
 # OPi.GPIO is orange pi version of RPi.GPIO
 # symlink to RPi.GPIO for pretty seamless replacement
