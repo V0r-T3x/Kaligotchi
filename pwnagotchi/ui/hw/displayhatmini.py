@@ -38,7 +38,7 @@ class DisplayHatMini(DisplayImpl):
         from pwnagotchi.ui.hw.libs.pimoroni.displayhatmini.ST7789 import ST7789
         config = self._config['ui']['display']
         if not self._display:
-            self._display = ST7789(config.get('spi_dev', 1),     # SPIDEV(spi_dev, spi_cs)
+            self._display = ST7789(config.get('spi_dev', 0),     # SPIDEV(spi_dev, spi_cs)
                                    config.get('spi_cs', 1),      # /dev/spidev{spi_dev}.{spi_cs}
                                    config.get('spi_dc', 9),      # GPIO pin for DC
                                    config.get('backlight',13),   # GPIO pin for backlight

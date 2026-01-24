@@ -49,7 +49,7 @@ class Client(object):
         if True:
             try:
 
-                async with websockets.connect(s, timeout = 10, ping_interval=60, ping_timeout=90) as ws:
+                async with websockets.connect(s, open_timeout = 10, ping_interval=60, ping_timeout=90) as ws:
                     if restart_monitor:
                         logging.info("resetting bettercap is so fetch")
                         self._reset_wifi_settings()
