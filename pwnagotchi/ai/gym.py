@@ -1,6 +1,6 @@
 import logging
-import gymnasium as gym
-from gymnasium import spaces
+import gym
+from gym import spaces
 import numpy as np
 
 import pwnagotchi.ai.featurizer as featurizer
@@ -111,19 +111,15 @@ class Environment(gym.Env):
 
         self._agent.on_ai_step()
 
-        terminated = not self._agent.is_training()
-        truncated = False
+        return self.last['state_v'], self.last['reward'], not self._agent.is_training(), {}
 
-        return self.last['state_v'], self.last['reward'], terminated, truncated, {}
-
-    def reset(self, seed=None, options=None):
+    def reset(self):
         # logging.info("[ai] resetting environment ...")
-        super().reset(seed=seed)
         self._epoch_num = 0
         state = self._next_epoch()
         self.last['state'] = state
         self.last['state_v'] = featurizer.featurize(state, 1)
-        return self.last['state_v'], {}
+        return self.last['state_v']
 
     def _render_histogram(self, hist):
         for ch in range(self._histogram_size):
