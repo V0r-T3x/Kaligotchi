@@ -1,7 +1,10 @@
 #gym;  platform_machine!="armv6l" and platform_release!="6.1.63"
-shimmy; platform_machine!="armv6l" and platform_release!="6.1.63"
-gymnasium==0.29.1; platform_machine!="armv7l"
-shimmy==1.3.0; platform_machine!="armv7l"
+#shimmy; platform_machine!="armv6l" and platform_release!="6.1.63"
+#gymnasium==0.29.1; platform_machine!="armv7l"
+#shimmy==1.3.0; platform_machine!="armv7l"
+gym==0.21.0
+pigpio
+gpiozero
 pycryptodome
 requests
 PyYAML
@@ -45,6 +48,10 @@ stable_baselines3; platform_machine=="aarch64"
 torch>=2.0.1; platform_machine=="armv6l"
 torchvision>=0.15.2; platform_machine=="armv6l"
 stable_baselines3==1.8.0; platform_machine=="armv6l"
+
+torch==2.1.0a0+git7bcf7da; platform_machine=="armv7l"
+torchvision>=0.16.0; platform_machine=="armv7l"
+stable_baselines3==1.8.0; platform_machine=="armv7l"
 
 # bananapi has no torch yet, so just skip them
 
