@@ -69,3 +69,6 @@ RPi.GPIO; platform_release=="6.1.21"
 #git+https://github.com/Sniffleupagus/OPi.GPIO@BPIm4zero#egg=OPi.GPIO ; platform_release=="6.1.31-sun50iw9"
 
 rpi_hardware_pwm; platform_release=="6.1.21"
+
+# other dependencies
+psutil

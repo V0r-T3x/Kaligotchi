@@ -12,9 +12,10 @@ import pwnagotchi.ai as ai
 
 
 class Stats(object):
-    def __init__(self, path, events_receiver):
+    def __init__(self, path, events_receiver, primal=False):
         self._lock = threading.Lock()
         self._receiver = events_receiver
+        self.primal = primal
 
         self.path = path
         self.born_at = time.time()
@@ -93,8 +94,14 @@ class AsyncTrainer(object):
         self._model = None
         self._is_training = False
         self._training_epochs = 0
+        
         self._nn_path = self._config['ai']['path']
-        self._stats = Stats("%s.json" % os.path.splitext(self._nn_path)[0], self)
+        if self._config['ai'].get('primal', False):
+            primal_nn_path = os.path.join(os.path.dirname(self._nn_path), 'primal.nn')
+            if os.path.exists(primal_nn_path):
+                os.remove(primal_nn_path)
+            self._nn_path = primal_nn_path
+        self._stats = Stats("%s.json" % os.path.splitext(self._nn_path)[0], self, self._config['ai'].get('primal', False))
 
     def set_training(self, training, for_epochs=0):
         self._is_training = training
@@ -133,6 +140,24 @@ class AsyncTrainer(object):
         plugins.on('ai_training_step', self, _locals, _globals)
 
     def on_ai_policy(self, new_params):
+        # Get bias from the environment
+        try:
+            bias = self._model.env.get_attr('last')[0].get('reflex_bias', {})
+        except Exception:
+            bias = {}
+
+        # Shape the policy: e.g., apply the recon_time_multiplier
+        if 'recon_time' in new_params and 'recon_time_multiplier' in bias:
+            new_params['recon_time'] *= bias['recon_time_multiplier']
+
+        # Apply the offset to RSSI
+        if 'min_rssi' in new_params and 'min_rssi_offset' in bias:
+            new_params['min_rssi'] += bias['min_rssi_offset']
+
+        # Throttle interactions if the interface is choking
+        if 'max_interactions' in new_params and 'interaction_scale' in bias:
+            new_params['max_interactions'] = max(1, int(new_params['max_interactions'] * bias['interaction_scale']))
+
         plugins.on('ai_policy', self, new_params)
         logging.info("[ai] setting new policy:")
         for name, value in new_params.items():
@@ -169,6 +194,9 @@ class AsyncTrainer(object):
         self._model = ai.load(self._config, self, self._epoch)
 
         if self._model:
+            if not os.path.exists(self._nn_path):
+                self._save_ai()
+
             self.on_ai_ready()
             prctl.set_name("ai: ready")
 

@@ -1,3 +1,4 @@
+# pwnagotchi/agent.py
 import time
 import json
 import os
@@ -18,6 +19,7 @@ from pwnagotchi.log import LastSession
 from pwnagotchi.bettercap import Client
 from pwnagotchi.mesh.utils import AsyncAdvertiser
 from pwnagotchi.ai.train import AsyncTrainer
+from pwnagotchi.ai.reflex import ReflexBrain
 
 RECOVERY_DATA_FILE = '/root/.pwnagotchi-recovery'
 
@@ -32,6 +34,15 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         Automata.__init__(self, config, view)
         AsyncAdvertiser.__init__(self, config, view, keypair)
         AsyncTrainer.__init__(self, config)
+
+        self._reflex = None
+        if config['ai'].get('reflex', False):
+            self._reflex = ReflexBrain(config['main']['iface'])
+        self._last_reflex_bias = {}
+        self._last_ticker_period = None
+        self._last_ticker_ts = 0
+        self._streaming_enabled = True
+        self._last_stream_toggle = 0
 
         self._started_at = time.time()
         self._filter = None if not config['main']['filter'] else re.compile(config['main']['filter'])
@@ -52,6 +63,8 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         self.last_session = LastSession(self._config)
         self.current_session = LastSession(self._config)
         self.mode = 'auto'
+
+        
 
         if not os.path.exists(config['bettercap']['handshakes']):
             os.makedirs(config['bettercap']['handshakes'])
@@ -74,12 +87,12 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
 
     def setup_events(self):
         logging.info("connecting to %s ...", self.url)
-
         for tag in self._config['bettercap']['silence']:
             try:
                 self.run('events.ignore %s' % tag, verbose_errors=False)
             except Exception:
                 pass
+        
 
     def _reset_wifi_settings(self):
         mon_iface = self._config['main']['iface']
@@ -91,6 +104,36 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         self.run('set wifi.handshakes.aggregate false')
         #channels = self._config['personality'].get('channels', [1,6,11])
         #self.run('wifi.recon.channel %s' % (','.join(map(str, channels))))
+
+    def run(self, command, verbose_errors=True):
+        # 1. Update reflexes based on current knowledge (logs, temp, errors)
+        # You'll need to pass current stats into observe()
+        if self._reflex:
+            # Throttle observation to avoid hyper-regulation (1s interval)
+            now = time.time()
+            if now - self._last_ticker_ts > 1.0:
+                if hasattr(self, '_epoch') and self._epoch:
+                     self._reflex.observe(self._epoch.data())
+                self._last_ticker_ts = now
+            
+            bias = self._reflex.bias()
+            
+            if 'ticker_period' in bias:
+                # Only update if the integer value changes to avoid spamming bettercap
+                new_period = int(bias['ticker_period'])
+                if self._last_ticker_period != new_period:
+                    self._last_ticker_period = new_period
+                    Client.run(self, 'set ticker.period %d' % new_period, False)
+        
+        # Measure latency to detect driver pressure
+        t0 = time.time()
+        res = Client.run(self, command, verbose_errors)
+        dt = time.time() - t0
+        
+        if self._reflex:
+            self._reflex.update_latency(dt)
+        
+        return res
 
     def start_monitor_mode(self):
         mon_iface = self._config['main']['iface']
@@ -462,8 +505,7 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         while True:
             logging.debug("[agent:_event_poller] polling events ...")
             try:
-                loop.create_task(self.start_websocket(self._on_event))
-                loop.run_forever()
+                loop.run_until_complete(self.start_websocket(self._on_event))
 
                 logging.warn("[agent:_event_poller] loop loop loop")
             except Exception as ex:
@@ -519,6 +561,21 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
             logging.debug('Skipping hidden: %s' % (ap))
             return False
 
+        # Check Reflex Injection Budget
+        scale = 1.0
+        if self._reflex:
+            bias = self._reflex.bias()
+            scale = bias.get("interaction_scale", 1.0)
+            if scale <= 0.1:
+                logging.debug("[Reflex] Injection suppressed (scale=%.2f)", scale)
+                return False
+
+            # Check Reflex Assoc Cooldown (Local Pacing)
+            cooldown = bias.get("assoc_cooldown", 0.0)
+            if cooldown > 0:
+                logging.debug("[Reflex] assoc cooldown %.2fs", cooldown)
+                time.sleep(cooldown)
+
         # send attack if random generated r is > associate probability
         r = random.random()
         if r >= self._config['personality'].get('assoc_prob', 1.0):
@@ -527,6 +584,10 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
 
         if throttle == -1:
             throttle = self._config['personality'].get('throttle_a', 0.0)
+
+        # Modulate throttle by stress
+        if throttle > 0:
+            throttle = throttle / max(0.1, scale)
 
         if self._config['personality']['associate'] and self._should_interact(ap['mac']):
             self._view.on_assoc(ap)
@@ -559,6 +620,21 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
             logging.debug('Skipping hidden: %s' % (ap))
             return False
 
+        # Check Reflex Injection Budget
+        scale = 1.0
+        if self._reflex:
+            bias = self._reflex.bias()
+            scale = bias.get("interaction_scale", 1.0)
+            if scale <= 0.1:
+                logging.debug("[Reflex] Injection suppressed (scale=%.2f)", scale)
+                return False
+
+            # Check Reflex Deauth Cooldown (Local Pacing)
+            cooldown = bias.get("deauth_cooldown", 0.0)
+            if cooldown > 0:
+                logging.debug("[Reflex] deauth cooldown %.2fs", cooldown)
+                time.sleep(cooldown)
+
         # send attack if random generated r is > deauth probability
         r = random.random()
         if r >= self._config['personality'].get('deauth_prob', 1.0):
@@ -567,6 +643,10 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
 
         if throttle == -1:
             throttle = self._config['personality'].get('throttle_d', 0.0)
+
+        # Modulate throttle by stress
+        if throttle > 0:
+            throttle = throttle / max(0.1, scale)
 
         if self._config['personality']['deauth'] and self._should_interact(sta['mac']):
             self._view.on_deauth(sta)
@@ -604,12 +684,62 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         elif self._epoch.did_associate:
             wait = self._config['personality']['min_recon_time']
 
+        # Apply the Oikos multiplier to the wait time
+        multiplier = 1.0
+        if self._reflex:
+            bias = self._reflex.bias()
+            multiplier = bias.get('recon_time_multiplier', 1.0)
+        wait = wait * multiplier
+
         if channel != self._current_channel:
             if self._current_channel != 0 and wait > 0:
                 if verbose:
                     logging.info("waiting for %ds on channel %d ...", wait, self._current_channel)
                 else:
                     logging.debug("waiting for %ds on channel %d ...", wait, self._current_channel)
+                
+                if multiplier != 1.0:
+                     logging.info("[Reflex] Modulated wait: %ss (x%s)", wait, multiplier)
+                self.wait_for(wait)
+            if verbose and self._epoch.any_activity:
+                logging.info("CHANNEL %d", channel)
+            try:
+                self.run('wifi.recon.channel %d' % channel)
+                self._current_channel = channel
+                self._epoch.track(hop=True)
+                self._view.set('channel', '%d' % channel)
+
+                plugins.on('channel_hop', self, channel)
+
+            except Exception as e:
+                logging.error("Error while setting channel (%s)", e)
+
+        # if in the previous loop no client stations has been deauthenticated
+        # and only association frames have been sent, we don't need to wait
+        # very long before switching channel as we don't have to wait for
+        # such client stations to reconnect in order to sniff the handshake.
+        wait = 0
+        if self._epoch.did_deauth:
+            wait = self._config['personality']['hop_recon_time']
+        elif self._epoch.did_associate:
+            wait = self._config['personality']['min_recon_time']
+
+        # Apply the Oikos multiplier to the wait time
+        multiplier = 1.0
+        if self._reflex:
+            bias = self._reflex.bias()
+            multiplier = bias.get('recon_time_multiplier', 1.0)
+        wait = wait * multiplier
+
+        if channel != self._current_channel:
+            if self._current_channel != 0 and wait > 0:
+                if verbose:
+                    logging.info("waiting for %ds on channel %d ...", wait, self._current_channel)
+                else:
+                    logging.debug("waiting for %ds on channel %d ...", wait, self._current_channel)
+                
+                if multiplier != 1.0:
+                     logging.info("[Reflex] Modulated wait: %ss (x%s)", wait, multiplier)
                 self.wait_for(wait)
             if verbose and self._epoch.any_activity:
                 logging.info("CHANNEL %d", channel)

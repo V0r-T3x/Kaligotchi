@@ -38,15 +38,15 @@ class Client(object):
     # session takes optional argument to pull a sub-dictionary
     #  ex.: "session/wifi", "session/ble"
     def session(self, sess="session"):
-        r = requests.get("%s/%s" % (self.url, sess), auth=self.auth)
+        r = requests.get("%s/%s" % (self.url, sess), auth=self.auth, timeout=30)
         return decode(r)
 
     async def start_websocket(self, consumer):
       try:
         s = "%s/events" % self.websocket
         restart_monitor = False
-        #while True:
-        if True:
+        while True:
+        #if True:
             try:
 
                 async with websockets.connect(s, open_timeout = 10, ping_interval=60, ping_timeout=90) as ws:
@@ -76,7 +76,7 @@ class Client(object):
         logging.exception("bye webhook: %s" % e)
 
     def run(self, command, verbose_errors=True):
-        r = requests.post("%s/session" % self.url, auth=self.auth, json={'cmd': command})
+        r = requests.post("%s/session" % self.url, auth=self.auth, json={'cmd': command}, timeout=30)
         try:
             return decode(r, verbose_errors=verbose_errors)
         except Exception as e:

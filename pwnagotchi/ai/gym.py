@@ -1,11 +1,45 @@
 import logging
-import gym
-from gym import spaces
+import os
 import numpy as np
+import gym as legacy_gym
+
+try:
+    import toml
+except ImportError:
+    toml = None
+
+PRIMAL = False
+try:
+    config_path = '/etc/pwnagotchi/config.toml'
+    if not os.path.exists(config_path):
+        config_path = './config.toml'
+
+    if toml and os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config = toml.load(f)
+            if config.get('ai', {}).get('primal', False):
+                PRIMAL = True
+except Exception as e:
+    logging.debug(f"[ai] error checking for primal mode: {e}")
+
+if PRIMAL:
+    try:
+        import gymnasium as gym
+        from gymnasium import spaces
+        logging.info("[ai] primal mode enabled: using gymnasium")
+    except ImportError:
+        import gym
+        from gym import spaces
+        logging.warning("[ai] primal mode enabled but gymnasium not found, falling back to gym")
+        PRIMAL = False
+else:
+    import gym
+    from gym import spaces
 
 import pwnagotchi.ai.featurizer as featurizer
 import pwnagotchi.ai.reward as reward
 from pwnagotchi.ai.parameter import Parameter
+from pwnagotchi.ai.reflex import ReflexBrain
 
 
 class Environment(gym.Env):
@@ -32,6 +66,11 @@ class Environment(gym.Env):
         self._agent = agent
         self._epoch = epoch
         self._epoch_num = 0
+        iface = agent.config()['main']['iface'] if hasattr(agent, 'config') else 'mon0'
+        self.reflex = None
+        if hasattr(agent, 'config') and agent.config()['ai'].get('reflex', False):
+            self.reflex = ReflexBrain(iface)
+
         self._last_render = None
 
         # see https://github.com/evilsocket/pwnagotchi/issues/583
@@ -53,8 +92,10 @@ class Environment(gym.Env):
             'state_v': None
         }
 
-        self.action_space = spaces.MultiDiscrete([p.space_size() for p in Environment.params if p.trainable])
-        self.observation_space = spaces.Box(low=0, high=1, shape=self._observation_shape, dtype=np.float32)
+        self.action_space = legacy_gym.spaces.MultiDiscrete([p.space_size() for p in Environment.params if p.trainable])
+        low = np.full(self._observation_shape, 0.0, dtype=np.float32)
+        high = np.full(self._observation_shape, 1.0, dtype=np.float32)
+        self.observation_space = legacy_gym.spaces.Box(low=low, high=high, shape=self._observation_shape, dtype=np.float32)
         self.reward_range = reward.range
 
     @staticmethod
@@ -96,29 +137,71 @@ class Environment(gym.Env):
         self.last['params'] = new_params
         self._agent.on_ai_policy(new_params)
 
+    def _observe(self):
+        """
+        Encapsulates the current state of the environment.
+        Synthesizes the 'Eco' (Environment) for the 'Genos' (Brain).
+        """
+        # This should return the 'state' dict that featurizer expects.
+        return self.last.get('state', {})
+
     def step(self, policy):
+        # Fetch the bias from the Reflex layer
+        if self.reflex:
+            reflex_bias = self.reflex.bias()
+            self.last['reflex_bias'] = reflex_bias
+
+            # Add reflex telemetry (physiology)
+            self.last['physiology'] = {
+                "iface_stress": self.reflex.stress_level,
+                "blindbug_risk": self.reflex.risk,
+            }
+        else:
+            self.last['reflex_bias'] = {}
+
         # create the parameters from the policy and update
         # update them in the algorithm
         self._apply_policy(policy)
         self._epoch_num += 1
 
+        obs = self._observe()
+        if self.reflex:
+            self.reflex.observe(obs)
+
         # wait for the algorithm to run with the new parameters
         state = self._next_epoch()
 
+        # Merge reflex state into main state for logging/rendering
+        if self.reflex and hasattr(self.reflex, 'state'):
+            state.update({k: v for k, v in self.reflex.state.items() if k in ['timeout_errors', 'injection_errors', 'io_wait', 'is_promiscuous']})
+
         self.last['reward'] = state['reward']
+
+        # Check if the reflex layer is signaling a 'Self-Sacrifice' or 'Rebirth'
+        if self.reflex and self.last.get('physiology', {}).get('blindbug_risk', 0) > 0.9:
+            logging.error("[ai] --- SYSTEM VIABILITY LOW: Reincarnation Likely ---")
+            # You could add a negative reward here to teach the
+            # main brain (Genos) to avoid the states leading to this crash.
+            self.last['reward'] -= 5.0
+
         self.last['state'] = state
         self.last['state_v'] = featurizer.featurize(state, self._epoch_num)
 
         self._agent.on_ai_step()
 
-        return self.last['state_v'], self.last['reward'], not self._agent.is_training(), {}
+        done = not self._agent.is_training()
+        return self.last['state_v'], self.last['reward'], done, {}
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         # logging.info("[ai] resetting environment ...")
+        if PRIMAL:
+            super().reset(seed=seed)
+
         self._epoch_num = 0
         state = self._next_epoch()
         self.last['state'] = state
         self.last['state_v'] = featurizer.featurize(state, 1)
+
         return self.last['state_v']
 
     def _render_histogram(self, hist):
@@ -140,6 +223,12 @@ class Environment(gym.Env):
         logging.info("[ai] --- training epoch %d/%d ---" % (self._epoch_num, self._agent.training_epochs()))
         logging.info("[ai] REWARD: %f" % self.last['reward'])
 
+        if 'physiology' in self.last:
+            logging.info("[ai] PHYSIO: stress=%.2f risk=%.2f" % (
+                self.last['physiology']['iface_stress'],
+                self.last['physiology']['blindbug_risk']
+            ))
+
         logging.debug("[ai] policy: %s" % ', '.join("%s:%s" % (name, value) for name, value in self.last['params'].items()))
 
         logging.info("[ai] observation:")
@@ -147,3 +236,8 @@ class Environment(gym.Env):
             if 'histogram' in name:
                 logging.info("    %s" % name.replace('_histogram', ''))
                 self._render_histogram(value)
+            elif name in ['sad_for_epochs', 'bored_for_epochs', 'blind_for_epochs',
+                          'inactive_for_epochs', 'active_for_epochs',
+                          'timeout_errors', 'injection_errors', 'io_wait', 'is_promiscuous',
+                          'temperature']:
+                logging.info("    %s: %s" % (name, value))

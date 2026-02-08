@@ -72,6 +72,7 @@ class Epoch(object):
         self._epoch_data = {}
         self._epoch_data_ready = threading.Event()
         self._reward = RewardFunction()
+        self._lock = threading.Lock()
 
     def wait_for_epoch_data(self, with_observation=True, timeout=None):
         # if with_observation:
@@ -134,36 +135,37 @@ class Epoch(object):
         self._observation_ready.set()
 
     def track(self, deauth=False, assoc=False, handshake=False, hop=False, sleep=False, miss=False, inc=1):
-        if deauth:
-            self.num_deauths += inc
-            self.num_deauths_tot += inc
-            self.did_deauth = True
-            self.any_activity = True
+        with self._lock:
+            if deauth:
+                self.num_deauths += inc
+                self.num_deauths_tot += inc
+                self.did_deauth = True
+                self.any_activity = True
 
-        if assoc:
-            self.num_assocs += inc
-            self.num_assocs_tot += inc
-            self.did_associate = True
-            self.any_activity = True
+            if assoc:
+                self.num_assocs += inc
+                self.num_assocs_tot += inc
+                self.did_associate = True
+                self.any_activity = True
 
-        if miss:
-            self.num_missed += inc
+            if miss:
+                self.num_missed += inc
 
-        if hop:
-            self.num_hops += inc
-            # these two are used in order to determine the sleep time in seconds
-            # before switching to a new channel ... if nothing happened so far
-            # during this epoch on the current channel, we will sleep less
-            self.did_deauth = False
-            self.did_associate = False
+            if hop:
+                self.num_hops += inc
+                # these two are used in order to determine the sleep time in seconds
+                # before switching to a new channel ... if nothing happened so far
+                # during this epoch on the current channel, we will sleep less
+                self.did_deauth = False
+                self.did_associate = False
 
-        if handshake:
-            self.num_shakes += inc
-            self.num_shakes_tot += inc
-            self.did_handshakes = True
+            if handshake:
+                self.num_shakes += inc
+                self.num_shakes_tot += inc
+                self.did_handshakes = True
 
-        if sleep:
-            self.num_slept += inc
+            if sleep:
+                self.num_slept += inc
 
     def next(self):
         if self.any_activity is False and self.did_handshakes is False:
@@ -192,48 +194,49 @@ class Epoch(object):
         mem = pwnagotchi.mem_usage()
         temp = pwnagotchi.temperature()
 
-        self.epoch_duration = now - self.epoch_started
+        with self._lock:
+            self.epoch_duration = now - self.epoch_started
 
-        # cache the state of this epoch for other threads to read
-        self._epoch_data = {
-            'duration_secs': self.epoch_duration,
-            'slept_for_secs': self.num_slept,
-            'blind_for_epochs': self.blind_for,
-            'inactive_for_epochs': self.inactive_for,
-            'active_for_epochs': self.active_for,
-            'sad_for_epochs': self.sad_for,
-            'bored_for_epochs': self.bored_for,
-            'missed_interactions': self.num_missed,
-            'num_hops': self.num_hops,
-            'num_peers': self.num_peers,
-            'tot_bond': self.tot_bond_factor,
-            'avg_bond': self.avg_bond_factor,
-            'num_deauths': self.num_deauths,
-            'tot_deauths': self.num_deauths_tot,
-            'num_associations': self.num_assocs,
-            'tot_associations': self.num_assocs_tot,
-            'num_handshakes': self.num_shakes,
-            'tot_handshakes': self.num_shakes_tot,
-            'cpu_load': cpu,
-            'cpu_load': cpu,
-            'mem_usage': mem,
-            'temperature': temp
-        }
+            # cache the state of this epoch for other threads to read
+            self._epoch_data = {
+                'duration_secs': self.epoch_duration,
+                'slept_for_secs': self.num_slept,
+                'blind_for_epochs': self.blind_for,
+                'inactive_for_epochs': self.inactive_for,
+                'active_for_epochs': self.active_for,
+                'sad_for_epochs': self.sad_for,
+                'bored_for_epochs': self.bored_for,
+                'missed_interactions': self.num_missed,
+                'num_hops': self.num_hops,
+                'num_peers': self.num_peers,
+                'tot_bond': self.tot_bond_factor,
+                'avg_bond': self.avg_bond_factor,
+                'num_deauths': self.num_deauths,
+                'tot_deauths': self.num_deauths_tot,
+                'num_associations': self.num_assocs,
+                'tot_associations': self.num_assocs_tot,
+                'num_handshakes': self.num_shakes,
+                'tot_handshakes': self.num_shakes_tot,
+                'cpu_load': cpu,
+                'cpu_load': cpu,
+                'mem_usage': mem,
+                'temperature': temp
+            }
 
-        reward = self._reward(self.epoch + 1, self._epoch_data)
-        self._epoch_data['reward'] = reward
-        self._epoch_data['avg_reward'] = (self._epoch_data.get('avg_reward', 0) * self.epoch + reward) / (self.epoch+1) if self.epoch >= 0 else 0
-        if reward > self._epoch_data.get('max_reward', -1e20):
-            self._epoch_data['max_reward'] = reward
-        if reward < self._epoch_data.get('min_reward', 1e20):
-            self._epoch_data['min_reward'] = reward
+            reward = self._reward(self.epoch + 1, self._epoch_data)
+            self._epoch_data['reward'] = reward
+            self._epoch_data['avg_reward'] = (self._epoch_data.get('avg_reward', 0) * self.epoch + reward) / (self.epoch+1) if self.epoch >= 0 else 0
+            if reward > self._epoch_data.get('max_reward', -1e20):
+                self._epoch_data['max_reward'] = reward
+            if reward < self._epoch_data.get('min_reward', 1e20):
+                self._epoch_data['min_reward'] = reward
 
-        self._epoch_data_ready.set()
+            self._epoch_data_ready.set()
 
-        logging.info("[epoch %d] duration=%s slept_for=%s blind=%d sad=%d bored=%d inactive=%d active=%d peers=%d tot_bond=%.2f "
-                     "avg_bond=%.2f hops=%d missed=%d deauths=%d assocs=%d handshakes=%d cpu=%d%% mem=%d%% "
-                     "temperature=%dC reward=%s" % (
-                         self.epoch,
+            logging.info("[epoch %d] duration=%s slept_for=%s blind=%d sad=%d bored=%d inactive=%d active=%d peers=%d tot_bond=%.2f "
+                        "avg_bond=%.2f hops=%d missed=%d deauths=%d assocs=%d handshakes=%d cpu=%d%% mem=%d%% "
+                        "temperature=%dC reward=%s" % (
+                            self.epoch,
                          utils.secs_to_hhmmss(self.epoch_duration),
                          utils.secs_to_hhmmss(self.num_slept),
                          self.blind_for,
@@ -254,18 +257,18 @@ class Epoch(object):
                          temp,
                          self._epoch_data['reward']))
 
-        self.epoch += 1
-        self.epoch_started = now
-        self.did_deauth = False
-        self.num_deauths = 0
-        self.num_peers = 0
-        self.tot_bond_factor = 0.0
-        self.avg_bond_factor = 0.0
-        self.did_associate = False
-        self.num_assocs = 0
-        self.num_missed = 0
-        self.did_handshakes = False
-        self.num_shakes = 0
-        self.num_hops = 0
-        self.num_slept = 0
-        self.any_activity = False
+            self.epoch += 1
+            self.epoch_started = now
+            self.did_deauth = False
+            self.num_deauths = 0
+            self.num_peers = 0
+            self.tot_bond_factor = 0.0
+            self.avg_bond_factor = 0.0
+            self.did_associate = False
+            self.num_assocs = 0
+            self.num_missed = 0
+            self.did_handshakes = False
+            self.num_shakes = 0
+            self.num_hops = 0
+            self.num_slept = 0
+            self.any_activity = False

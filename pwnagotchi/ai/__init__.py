@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import logging
 
@@ -68,6 +69,7 @@ def load(config, agent, epoch, from_disk=True):
         logging.debug("[ai] gym wrapper imported in %.2fs" % (time.time() - start))
 
         env = wrappers.Environment(agent, epoch)
+
         env = DummyVecEnv([lambda: env])
 
         logging.info("[ai] creating model ...")
@@ -76,10 +78,16 @@ def load(config, agent, epoch, from_disk=True):
         a2c = A2C(SB_A2C_POLICY, env, **config['params'])
         logging.debug("[ai] A2C created in %.2fs" % (time.time() - start))
 
-        if from_disk and os.path.exists(config['path']):
-            logging.info("[ai] loading %s ..." % config['path'])
+        nn_path = config['path']
+        if config.get('primal', False):
+            # Use primal.nn in the same folder as brain.nn
+            nn_path = os.path.join(os.path.dirname(config['path']), 'primal.nn')
+            logging.info("[ai] Primal brain path: %s" % nn_path)
+
+        if from_disk and os.path.exists(nn_path):
+            logging.info("[ai] loading %s ..." % nn_path)
             start = time.time()
-            a2c.load(config['path'], env)
+            a2c = a2c.load(nn_path, env)
             logging.debug("[ai] A2C loaded in %.2fs" % (time.time() - start))
         else:
             logging.info("[ai] model created:")
