@@ -111,7 +111,7 @@ class ST7789(object):
     """Representation of an ST7789 TFT LCD."""
 
     def __init__(self, port, cs, dc, backlight, rst=None, width=320,
-                 height=240, rotation=0, invert=True, spi_speed_hz=3 * 1000 * 1000,
+                 height=240, rotation=0, invert=True, spi_speed_hz=60 * 1000 * 1000,
                  backlight_pwm=150,
                  offset_left=0,
                  offset_top=0):
@@ -171,9 +171,23 @@ class ST7789(object):
                 if pwm_type == 1:
                     self._backlight_pwm = HardwarePWM(pwm_channel=1, hz=backlight_pwm)
                 elif pwm_type == 2:
-                    self._backlight_pwm = HardwarePWM(backlight, backlight_pwm)
-                self._brightness = 100
-                self._backlight_pwm.start(self._brightness)
+                    try:
+                        self._backlight_pwm = HardwarePWM(backlight, backlight_pwm)
+                    except RuntimeError:
+                        try:
+                            GPIO.cleanup(backlight)
+                            GPIO.setup(backlight, GPIO.OUT)
+                            self._backlight_pwm = HardwarePWM(backlight, backlight_pwm)
+                        except RuntimeError:
+                            self._backlight_pwm = None
+
+                if self._backlight_pwm:
+                    self._brightness = 100
+                    self._backlight_pwm.start(self._brightness)
+                else:
+                    GPIO.setup(backlight, GPIO.OUT)
+                    GPIO.output(backlight, GPIO.HIGH)
+                    self._brightness = 100
             else:
                 self._backlight_pwm = None
                 GPIO.setup(backlight, GPIO.OUT)
