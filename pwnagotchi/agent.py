@@ -655,7 +655,8 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
                 logging.info("deauthing %s (%s) from %s (%s %s) on channel %d, %d dBm ...",
                     sta['mac'], sta['vendor'], ap['hostname'], ap['mac'], ap['vendor'], ap['channel'], ap['rssi'])
                 self.run('wifi.deauth %s' % sta['mac'])
-                self._count_interact(ap['mac'])
+                if self._reflex:
+                    self._count_interact(ap['mac'])
                 self._epoch.track(deauth=True)
             except Exception as e:
                 self._on_error(sta['mac'], e)
