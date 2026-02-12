@@ -70,6 +70,15 @@ TEMPLATE = """
 
     function loadData(url, elm, title, fill) {
         var data = ajaxDataRenderer(url);
+        if (!data || !data.values || data.values.length == 0) return;
+        var hasData = false;
+        for (var i = 0; i < data.values.length; i++) {
+            if (data.values[i] && data.values[i].length > 0) {
+                hasData = true;
+                break;
+            }
+        }
+        if (!hasData) return;
         var plot_os = $.jqplot(elm, data.values,{
         title: title,
         stackSeries: fill,
@@ -135,12 +144,21 @@ TEMPLATE = """
         loadData('/plugins/session-stats/duration' + '?session=' + session, 'chart_duration', 'Sleeping', true)
         loadData('/plugins/session-stats/reward' + '?session=' + session, 'chart_reward', 'Reward', false)
         loadData('/plugins/session-stats/epoch' + '?session=' + session, 'chart_epoch', 'Epochs', false)
+        loadData('/plugins/session-stats/reflex_error' + '?session=' + session, 'chart_reflex_error', 'Reflex Errors', false)
+        loadData('/plugins/session-stats/reflex_sys' + '?session=' + session, 'chart_reflex_sys', 'Reflex System', false)
+        loadData('/plugins/session-stats/reflex_mood' + '?session=' + session, 'chart_reflex_mood', 'Reflex Mood', false)
     }
 
 
     loadSessionFiles();
     loadSessionData();
     setInterval(loadSessionData, 60000);
+
+    $("#export").click(function() {
+        var x = document.getElementById("session");
+        var session = x.options[x.selectedIndex].text;
+        window.location.href = "/plugins/session-stats/export?session=" + session;
+    });
     });
 {% endblock %}
 
@@ -148,12 +166,16 @@ TEMPLATE = """
     <select id="session">
         <option selected>Current</option>
     </select>
+    <input type="button" id="export" value="Export to JSON" />
     <div id="chart_os" class="chart"></div>
     <div id="chart_temp" class="chart"></div>
     <div id="chart_wifi" class="chart"></div>
     <div id="chart_duration" class="chart"></div>
     <div id="chart_reward" class="chart"></div>
     <div id="chart_epoch" class="chart"></div>
+    <div id="chart_reflex_error" class="chart"></div>
+    <div id="chart_reflex_sys" class="chart"></div>
+    <div id="chart_reflex_mood" class="chart"></div>
 {% endblock %}
 """
 
@@ -206,6 +228,23 @@ class SessionStats(plugins.Plugin):
         """
         Save the epoch_data to self.stats
         """
+        if hasattr(agent, '_reflex') and agent._reflex:
+            epoch_data['timeout_errors'] = agent._reflex.state.get('timeout_errors', 0)
+            epoch_data['injection_errors'] = agent._reflex.state.get('injection_errors', 0)
+            epoch_data['io_wait'] = agent._reflex.state.get('io_wait', 0)
+            epoch_data['is_promiscuous'] = agent._reflex.state.get('is_promiscuous', 0)
+            epoch_data['stress'] = agent._reflex.stress_level
+            epoch_data['risk'] = agent._reflex.risk
+            epoch_data['bias'] = agent._reflex.bias()
+        else:
+            epoch_data['timeout_errors'] = 0
+            epoch_data['injection_errors'] = 0
+            epoch_data['io_wait'] = 0
+            epoch_data['is_promiscuous'] = 0
+            epoch_data['stress'] = 0
+            epoch_data['risk'] = 0
+            epoch_data['bias'] = {}
+
         with self.lock:
             self.stats[self.clock.now().strftime("%H:%M:%S")] = epoch_data
             self.session.update(data={'data': self.stats})
@@ -216,7 +255,7 @@ class SessionStats(plugins.Plugin):
         result['values'] = list()
         result['labels'] = subkeys
         for plot_key in subkeys:
-            v = [ [ts,d[plot_key]] for ts, d in data.items()]
+            v = [ [ts,d.get(plot_key, 0)] for ts, d in data.items()]
             result['values'].append(v)
         return result
 
@@ -254,8 +293,32 @@ class SessionStats(plugins.Plugin):
             extract_keys = [
                 'active_for_epochs',
             ]
+        elif path == "reflex_error":
+            extract_keys = [
+                'timeout_errors',
+                'injection_errors',
+            ]
+        elif path == "reflex_sys":
+            extract_keys = [
+                'io_wait',
+                'is_promiscuous',
+            ]
+        elif path == "reflex_mood":
+            extract_keys = [
+                'stress',
+                'risk',
+            ]
         elif path == "session":
-            return jsonify({'files': os.listdir(self.options['save_directory'])})
+            return jsonify({'files': sorted(os.listdir(self.options['save_directory']), reverse=True)})
+        elif path == "export":
+            with self.lock:
+                data = self.stats
+                if session_param and session_param != 'Current':
+                    file_stats = StatusFile(os.path.join(self.options['save_directory'], session_param), data_format='json')
+                    data = file_stats.data_field_or('data', default=dict())
+            response = jsonify(data)
+            response.headers['Content-Disposition'] = 'attachment; filename=session_stats_{}.json'.format(session_param)
+            return response
 
         with self.lock:
             data = self.stats
