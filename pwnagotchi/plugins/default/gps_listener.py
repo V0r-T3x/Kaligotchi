@@ -13,7 +13,7 @@ from pwnagotchi.ui.view import BLACK
 # Android
 # Termux:API : https://f-droid.org/en/packages/com.termux.api/
 # Termux : https://f-droid.org/en/packages/com.termux/
-pkg install termux-api socat bc jq coreutils netcat-openbsd
+pkg install termux-api socat bc
 
 -----
 #!/data/data/com.termux/files/usr/bin/bash
@@ -91,6 +91,9 @@ class GPS(plugins.Plugin):
     __license__ = "GPL3"
     __description__ = "Receive GPS coordinates via termux-location and save whenever an handshake is captured."
 
+    LINE_SPACING = 10
+    LABEL_SPACING = 0
+
     def __init__(self):
         self.listen_ip = self.get_ip_address('bnep0')
         self.listen_port = "5000"
@@ -98,10 +101,12 @@ class GPS(plugins.Plugin):
         self.read_virtual_serial = "/dev/ttyUSB0"
         self.baud_rate = "19200"
         self.socat_process = None
+        self.pty_process = None
         self.stop_event = threading.Event()
         self.status_lock = threading.Lock()
         self.status = '-'
         self.socat_thread = threading.Thread(target=self.run_socat)
+        self.agent = None
 
     def get_ip_address(self, interface):
         try:
@@ -143,7 +148,7 @@ class GPS(plugins.Plugin):
             os.remove(self.read_virtual_serial)
 
     def create_virtual_serial_ports(self):
-        self.socat_process = subprocess.Popen(
+        self.pty_process = subprocess.Popen(
             ["socat", "-d", "-d", f"pty,link={self.write_virtual_serial},mode=777",
              f"pty,link={self.read_virtual_serial},mode=777"],
             stdout=subprocess.PIPE,
@@ -153,7 +158,7 @@ class GPS(plugins.Plugin):
     def run_socat(self):
         while not self.stop_event.is_set():
             self.socat_process = subprocess.Popen(
-                ["socat", f"UDP-RECVFROM:{self.listen_port},reuseaddr", "-"],
+                ["socat", f"UDP-RECVFROM:{self.listen_port},reuseaddr,bind={self.listen_ip}", "-"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
@@ -179,11 +184,15 @@ class GPS(plugins.Plugin):
         if self.socat_process:
             self.socat_process.terminate()
             self.socat_process.wait() # Ensure the process is reaped
+        if self.pty_process:
+            self.pty_process.terminate()
+            self.pty_process.wait()
         self.stop_event.set()
         self.socat_thread.join()
         self.cleanup_virtual_serial_ports()
 
     def on_ready(self, agent):
+        self.agent = agent
         if os.path.exists(self.read_virtual_serial):
             logging.info(
                 f"enabling bettercap's gps module for {self.read_virtual_serial}"
@@ -220,14 +229,82 @@ class GPS(plugins.Plugin):
             logging.warning("not saving GPS. Couldn't find location.")
 
     def on_ui_setup(self, ui):
+        try:
+            # Configure line_spacing
+            line_spacing = int(self.options['linespacing'])
+        except Exception:
+            # Set default value
+            line_spacing = self.LINE_SPACING
+
+        try:
+            # Configure position
+            pos = self.options['position'].split(',')
+            pos = [int(x.strip()) for x in pos]
+            lat_pos = (pos[0] + 5, pos[1])
+            lon_pos = (pos[0], pos[1] + line_spacing)
+            alt_pos = (pos[0] + 5, pos[1] + (2 * line_spacing))
+        except Exception:
+            # Set default value based on display type
+            if ui.is_waveshare_v2():
+                lat_pos = (127, 74)
+                lon_pos = (122, 84)
+                alt_pos = (127, 94)
+            elif ui.is_waveshare_v1():
+                lat_pos = (130, 70)
+                lon_pos = (125, 80)
+                alt_pos = (130, 90)
+            elif ui.is_inky():
+                lat_pos = (127, 60)
+                lon_pos = (122, 70)
+                alt_pos = (127, 80)
+            elif ui.is_waveshare144lcd():
+                # guessed values, add tested ones if you can
+                lat_pos = (67, 73)
+                lon_pos = (62, 83)
+                alt_pos = (67, 93)
+            elif ui.is_dfrobot_v2():
+                lat_pos = (127, 74)
+                lon_pos = (122, 84)
+                alt_pos = (127, 94)
+            elif ui.is_waveshare27inch():
+                lat_pos = (6, 120)
+                lon_pos = (1, 135)
+                alt_pos = (6, 150)
+            elif ui.is_displayhatmini():
+                lat_pos = (127, 51)
+                lon_pos = (122, 61)
+                alt_pos = (127, 71)
+            else:
+                # guessed values, add tested ones if you can
+                lat_pos = (127, 51)
+                lon_pos = (122, 61)
+                alt_pos = (127, 71)
+
         with ui._lock:
             ui.add_element('gps', LabeledValue(color=BLACK, label='GPS', value='-', position=(ui.width() / 2 - 47, 0), label_font=fonts.Bold, text_font=fonts.Medium))
+            ui.add_element("latitude", LabeledValue(color=BLACK, label="lat:", value="-", position=lat_pos, label_font=fonts.Small, text_font=fonts.Small, label_spacing=self.LABEL_SPACING))
+            ui.add_element("longitude", LabeledValue(color=BLACK, label="long:", value="-", position=lon_pos, label_font=fonts.Small, text_font=fonts.Small, label_spacing=self.LABEL_SPACING))
+            ui.add_element("altitude", LabeledValue(color=BLACK, label="alt:", value="-", position=alt_pos, label_font=fonts.Small, text_font=fonts.Small, label_spacing=self.LABEL_SPACING))
 
     def on_unload(self, ui):
         self.cleanup()  
 
         with ui._lock:
             ui.remove_element('gps')
+            ui.remove_element('latitude')
+            ui.remove_element('longitude')
+            ui.remove_element('altitude')
 
     def on_ui_update(self, ui):
         ui.set('gps', self.get_status())
+        if not self.agent and hasattr(ui, '_agent'):
+            self.agent = ui._agent
+
+        if self.agent:
+            coordinates = self.agent.session().get('gps')
+            logging.debug(f"UI update GPS: {coordinates}")
+            if coordinates and coordinates.get("Latitude") is not None and coordinates.get("Longitude") is not None:
+                ui.set("latitude", f"{coordinates['Latitude']:.4f}")
+                ui.set("longitude", f"{coordinates['Longitude']:.4f}")
+                if coordinates.get("Altitude") is not None:
+                    ui.set("altitude", f"{coordinates['Altitude']:.1f}m")
