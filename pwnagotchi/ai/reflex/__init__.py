@@ -140,8 +140,8 @@ class ReflexBrain:
         self.patterns = {
             'timeout': re.compile(r'brcmf_.*failed.*-110'),
             'injection_fail': re.compile(r'wifi could not inject WiFi packet.*Resource temporarily unavailable'),
-            'promisc_enter': re.compile(r'%s: entered promiscuous mode' % iface),
-            'promisc_left': re.compile(r'%s: left promiscuous mode' % iface),
+            'promisc_enter': re.compile(r'%s.*: entered promiscuous mode' % iface),
+            'promisc_left': re.compile(r'%s.*: left promiscuous mode' % iface),
             'association': re.compile(r'sending association frame to .* \(([0-9a-fA-F:]{17})'),
             'handshake': re.compile(r'captured handshake from .*?([0-9a-fA-F:]{17})')
         }
@@ -159,7 +159,10 @@ class ReflexBrain:
         self._inj_rate = 0.0
         self._log_window = 1.0
         self._last_log_check = time.time()
+        self._is_promiscuous = 0
         self._cached_log_metrics = {'timeout_errors': 0, 'injection_errors': 0, 'io_wait': 0.0, 'is_promiscuous': 0}
+        self.timeout_errors = 0
+        self.injection_errors = 0
         
         self._state_file = "/root/.reflex_state.json"
         self._baseline = {
@@ -252,9 +255,8 @@ class ReflexBrain:
             return self._cached_log_metrics
 
         self._log_window = max(1.0, now - self._last_log_check)
-        self._last_log_check = now
 
-        metrics = {'timeout_errors': 0, 'injection_errors': 0, 'io_wait': 0.0, 'is_promiscuous': 0}
+        metrics = {'timeout_errors': 0, 'injection_errors': 0, 'io_wait': 0.0, 'is_promiscuous': self._is_promiscuous}
         try:
             metrics['io_wait'] = psutil.cpu_times_percent(interval=None).iowait
         except Exception:
@@ -262,14 +264,14 @@ class ReflexBrain:
 
         try:
             # Check kernel logs for timeouts
-            cmd = ['journalctl', '-k', '-n', '40', '--no-pager']
+            cmd = ['journalctl', '-k', '--since', f'@{self._last_log_check}', '--no-pager']
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, _ = proc.communicate()
             klogs = out.decode('utf-8', errors='ignore')
             metrics['timeout_errors'] = len(self.patterns['timeout'].findall(klogs))
 
-            # Check general logs for promiscuous mode
-            cmd = ['journalctl', '-n', '40', '--no-pager']
+            # Check general logs for promiscuous mode and injection errors
+            cmd = ['journalctl', '--since', f'@{self._last_log_check}', '--no-pager']
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out, _ = proc.communicate()
             logs = out.decode('utf-8', errors='ignore')
@@ -286,12 +288,17 @@ class ReflexBrain:
             lefts = [m.start() for m in self.patterns['promisc_left'].finditer(logs)]
 
             if enters and lefts:
-                metrics['is_promiscuous'] = 1 if max(enters) > max(lefts) else 0
+                self._is_promiscuous = 1 if max(enters) > max(lefts) else 0
             elif enters:
-                metrics['is_promiscuous'] = 1
+                self._is_promiscuous = 1
+            elif lefts:
+                self._is_promiscuous = 0
+            
+            metrics['is_promiscuous'] = self._is_promiscuous
         except Exception as e:
             logging.debug("[ReflexBrain] Log check error: %s" % e)
         
+        self._last_log_check = now
         self._cached_log_metrics = metrics
         return metrics
     
@@ -353,11 +360,22 @@ class ReflexBrain:
         """
         Receives the SAME observation as the gym env.
         """
+        if observation is not self.state:
+            self.timeout_errors = 0
+            self.injection_errors = 0
+
         log_metrics = self._check_logs()
-        observation.update(log_metrics)
+        
+        self.timeout_errors += log_metrics.get('timeout_errors', 0)
+        self.injection_errors += log_metrics.get('injection_errors', 0)
+        
+        observation['timeout_errors'] = self.timeout_errors
+        observation['injection_errors'] = self.injection_errors
+        observation['io_wait'] = log_metrics.get('io_wait', 0)
+        observation['is_promiscuous'] = log_metrics.get('is_promiscuous', 0)
 
         # Update streaks
-        inj_errs = observation.get('injection_errors', 0)
+        inj_errs = log_metrics.get('injection_errors', 0)
         if inj_errs > 0:
             self._inj_fail_streak += 1
             self._success_streak = 0
@@ -544,7 +562,8 @@ class ReflexBrain:
     def stress_level(self):
         # 0.0 to 1.0 based on io_wait, injection_errors, temp
         io = float(self.state.get('io_wait', 0)) / 100.0
-        inj = min(float(self.state.get('injection_errors', 0)), 100.0) / 100.0
+        # Injection errors are critical. Scale so ~50 errors = 100% stress.
+        inj = min(float(self.state.get('injection_errors', 0)), 50.0) / 50.0
         temp = max(0.0, float(self.state.get('temperature', 40)) - 50.0) / 30.0
         # Latency > 1.0s is considered critical stress
         lat = min(self._cmd_latency, 1.0)
@@ -553,7 +572,8 @@ class ReflexBrain:
     @property
     def risk(self):
         # 0.0 to 1.0 based on timeout_errors, blind_for_epochs
-        to = min(float(self.state.get('timeout_errors', 0)), 1.0) / 5.0
+        # Timeouts are less dramatic. Allow up to 15 before maxing risk.
+        to = min(float(self.state.get('timeout_errors', 0)), 20.0) / 100.0
         blind = min(float(self.state.get('blind_for_epochs', 0)), 10.0) / 10.0
         return min(1.0, max(to, blind))
 

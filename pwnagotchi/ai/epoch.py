@@ -224,6 +224,10 @@ class Epoch(object):
             }
 
             reward = self._reward(self.epoch + 1, self._epoch_data)
+            # clip reward to avoid outliers
+            if reward > 100: reward = 100
+            elif reward < -100: reward = -100
+
             self._epoch_data['reward'] = reward
             self._epoch_data['avg_reward'] = (self._epoch_data.get('avg_reward', 0) * self.epoch + reward) / (self.epoch+1) if self.epoch >= 0 else 0
             if reward > self._epoch_data.get('max_reward', -1e20):

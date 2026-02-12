@@ -68,7 +68,9 @@ class Environment(gym.Env):
         self._epoch_num = 0
         iface = agent.config()['main']['iface'] if hasattr(agent, 'config') else 'mon0'
         self.reflex = None
-        if hasattr(agent, 'config') and agent.config()['ai'].get('reflex', False):
+        if hasattr(agent, '_reflex') and agent._reflex:
+            self.reflex = agent._reflex
+        elif hasattr(agent, 'config') and agent.config()['ai'].get('reflex', False):
             self.reflex = ReflexBrain(iface)
 
         self._last_render = None
@@ -165,7 +167,8 @@ class Environment(gym.Env):
         self._epoch_num += 1
 
         obs = self._observe()
-        if self.reflex:
+        # Only drive reflex if we own it (it's not the agent's shared instance)
+        if self.reflex and (not hasattr(self._agent, '_reflex') or self.reflex != self._agent._reflex):
             self.reflex.observe(obs)
 
         # wait for the algorithm to run with the new parameters
