@@ -8,6 +8,8 @@ import time
 import json
 import os
 
+from .mobility import MobilityContext
+
 try:
     import gymnasium as gym
     from gymnasium import spaces
@@ -134,6 +136,8 @@ class ReflexBrain:
     """
     def __init__(self, iface='mon0'):
         self.env = ReflexEnv()
+        # CONTEXT: Mobility pressure from GPS (0.0 to 1.0)
+        self.mobility = MobilityContext()
         self.iface = iface
         self.state = {}
         self.familiarity = {}  # MAC -> score (0.0 to 1.0)
@@ -149,7 +153,7 @@ class ReflexBrain:
         self.frustration = 0.0
         
         self.ticker_period = 10.0        # seconds (starting point)
-        self.ticker_min = 5.0
+        self.ticker_min = 1.0 # 5.0
         self.ticker_max = 30.0
 
         self._inj_fail_streak = 0
@@ -364,6 +368,20 @@ class ReflexBrain:
             self.timeout_errors = 0
             self.injection_errors = 0
 
+        gps = observation.get('gps')
+        mobility_pressure = 0.0
+        if gps and isinstance(gps, dict):
+            lat = gps.get('Latitude') or gps.get('lat')
+            lon = gps.get('Longitude') or gps.get('lon')
+            if lat is not None and lon is not None:
+                mobility_pressure = self.mobility.update(lat, lon)
+            else:
+                mobility_pressure = self.mobility.mobility_pressure
+        else:
+            mobility_pressure = self.mobility.mobility_pressure
+
+        observation['mobility_pressure'] = mobility_pressure
+
         log_metrics = self._check_logs()
         
         self.timeout_errors += log_metrics.get('timeout_errors', 0)
@@ -461,8 +479,12 @@ class ReflexBrain:
             "interaction_scale": 1.0,
             "ticker_period": self.ticker_period,
             "deauth_cooldown": 0.0,
-            "assoc_cooldown": 0.0
+            "assoc_cooldown": 0.0,
+            "ttl_multiplier": 1.0
         }
+
+        mobility = self.state.get('mobility_pressure', 0.0)
+        modifiers["ttl_multiplier"] = 1.0 - (0.6 * mobility)
 
         if self._phase == "NEONATAL":
             return {

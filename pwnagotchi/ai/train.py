@@ -98,8 +98,8 @@ class AsyncTrainer(object):
         self._nn_path = self._config['ai']['path']
         if self._config['ai'].get('primal', False):
             primal_nn_path = os.path.join(os.path.dirname(self._nn_path), 'primal.nn')
-            if os.path.exists(primal_nn_path):
-                os.remove(primal_nn_path)
+            #if os.path.exists(primal_nn_path):
+            #    os.remove(primal_nn_path)
             self._nn_path = primal_nn_path
         self._stats = Stats("%s.json" % os.path.splitext(self._nn_path)[0], self, self._config['ai'].get('primal', False))
 
@@ -157,6 +157,13 @@ class AsyncTrainer(object):
         # Throttle interactions if the interface is choking
         if 'max_interactions' in new_params and 'interaction_scale' in bias:
             new_params['max_interactions'] = max(1, int(new_params['max_interactions'] * bias['interaction_scale']))
+
+        # Apply TTL multiplier from reflex
+        if 'ttl_multiplier' in bias:
+            if 'ap_ttl' in new_params:
+                new_params['ap_ttl'] = int(new_params['ap_ttl'] * bias['ttl_multiplier'])
+            if 'sta_ttl' in new_params:
+                new_params['sta_ttl'] = int(new_params['sta_ttl'] * bias['ttl_multiplier'])
 
         plugins.on('ai_policy', self, new_params)
         logging.info("[ai] setting new policy:")

@@ -147,6 +147,7 @@ TEMPLATE = """
         loadData('/plugins/session-stats/reflex_error' + '?session=' + session, 'chart_reflex_error', 'Reflex Errors', false)
         loadData('/plugins/session-stats/reflex_sys' + '?session=' + session, 'chart_reflex_sys', 'Reflex System', false)
         loadData('/plugins/session-stats/reflex_mood' + '?session=' + session, 'chart_reflex_mood', 'Reflex Mood', false)
+        loadData('/plugins/session-stats/reflex_mobility' + '?session=' + session, 'chart_reflex_mobility', 'Reflex Mobility', false)
     }
 
 
@@ -176,6 +177,7 @@ TEMPLATE = """
     <div id="chart_reflex_error" class="chart"></div>
     <div id="chart_reflex_sys" class="chart"></div>
     <div id="chart_reflex_mood" class="chart"></div>
+    <div id="chart_reflex_mobility" class="chart"></div>
 {% endblock %}
 """
 
@@ -235,6 +237,7 @@ class SessionStats(plugins.Plugin):
             epoch_data['is_promiscuous'] = agent._reflex.state.get('is_promiscuous', 0)
             epoch_data['stress'] = agent._reflex.stress_level
             epoch_data['risk'] = agent._reflex.risk
+            epoch_data['mobility_pressure'] = agent._reflex.state.get('mobility_pressure', 0)
             epoch_data['bias'] = agent._reflex.bias()
         else:
             epoch_data['timeout_errors'] = 0
@@ -243,6 +246,7 @@ class SessionStats(plugins.Plugin):
             epoch_data['is_promiscuous'] = 0
             epoch_data['stress'] = 0
             epoch_data['risk'] = 0
+            epoch_data['mobility_pressure'] = 0
             epoch_data['bias'] = {}
 
         with self.lock:
@@ -279,6 +283,7 @@ class SessionStats(plugins.Plugin):
                 'num_deauths',
                 'num_associations',
                 'num_handshakes',
+                'num_bc_errors',
             ]
         elif path == "duration":
             extract_keys = [
@@ -307,6 +312,10 @@ class SessionStats(plugins.Plugin):
             extract_keys = [
                 'stress',
                 'risk',
+            ]
+        elif path == "reflex_mobility":
+            extract_keys = [
+                'mobility_pressure',
             ]
         elif path == "session":
             return jsonify({'files': sorted(os.listdir(self.options['save_directory']), reverse=True)})
