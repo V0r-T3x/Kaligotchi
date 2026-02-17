@@ -43,6 +43,8 @@ class Epoch(object):
         self.num_shakes_tot = 0
         # number of handshakes captured in this epoch
         self.num_shakes = 0
+        # number of bettercap connection errors
+        self.num_bc_errors = 0
         # number of channels hops
         self.num_hops = 0
         # number of seconds sleeping
@@ -134,7 +136,7 @@ class Epoch(object):
         }
         self._observation_ready.set()
 
-    def track(self, deauth=False, assoc=False, handshake=False, hop=False, sleep=False, miss=False, inc=1):
+    def track(self, deauth=False, assoc=False, handshake=False, hop=False, sleep=False, miss=False, bc_error=False, inc=1):
         with self._lock:
             if deauth:
                 self.num_deauths += inc
@@ -150,6 +152,9 @@ class Epoch(object):
 
             if miss:
                 self.num_missed += inc
+
+            if bc_error:
+                self.num_bc_errors += inc
 
             if hop:
                 self.num_hops += inc
@@ -217,6 +222,7 @@ class Epoch(object):
                 'tot_associations': self.num_assocs_tot,
                 'num_handshakes': self.num_shakes,
                 'tot_handshakes': self.num_shakes_tot,
+                'num_bc_errors': self.num_bc_errors,
                 'cpu_load': cpu,
                 'cpu_load': cpu,
                 'mem_usage': mem,
@@ -273,6 +279,7 @@ class Epoch(object):
             self.num_missed = 0
             self.did_handshakes = False
             self.num_shakes = 0
+            self.num_bc_errors = 0
             self.num_hops = 0
             self.num_slept = 0
             self.any_activity = False
