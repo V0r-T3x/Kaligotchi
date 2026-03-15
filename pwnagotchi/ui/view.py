@@ -46,7 +46,7 @@ class View(object):
         self._width = self._layout['width']
         self._height = self._layout['height']
         uptime_pos = self._layout['uptime']
-        kali_uptime_pos = (uptime_pos[0] - 8, self._layout['name'][1])
+        run_uptime_pos = (uptime_pos[0] - 8, self._layout['name'][1])
         self._state = State(state={
             'channel': LabeledValue(color=BLACK, label='CH', value='00', position=self._layout['channel'],
                                     label_font=fonts.Bold,
@@ -58,7 +58,7 @@ class View(object):
             'uptime': LabeledValue(color=BLACK, label='UP', value='00:00:00', position=self._layout['uptime'],
                                    label_font=fonts.Bold,
                                    text_font=fonts.Medium),
-            'kali_uptime': LabeledValue(color=BLACK, label='RUN', value='00:00:00', position=kali_uptime_pos,
+            'run_uptime': LabeledValue(color=BLACK, label='RUN', value='00:00:00', position=run_uptime_pos,
                                         label_font=fonts.Bold,
                                         text_font=fonts.Medium),
 
@@ -133,8 +133,8 @@ class View(object):
         while True:
             try:
                 self._tick_face_sequence()
-                if self._agent is not None and hasattr(self._agent, 'kali_session_duration'):
-                    self.set('kali_uptime', self._agent.kali_session_duration())
+                if self._agent is not None and hasattr(self._agent, 'tool_run_duration'):
+                    self.set('run_uptime', self._agent.tool_run_duration())
                 name = self._state.get('name')
                 self.set('name', name.rstrip('█').strip() if '█' in name else (name + ' █'))
                 self.update()
@@ -230,7 +230,11 @@ class View(object):
         self.update()
 
     def on_ai_ready(self):
-        self.set('mode', '  AI')
+        if self._agent is not None and getattr(self._agent, 'mode', None) == 'kali':
+            logging.info("[kali] suppressed legacy ai mode badge in Kali mode")
+            self.set('mode', 'K-AI')
+        else:
+            self.set('mode', '  AI')
         self.set('face', faces.HAPPY)
         self.set('status', self._voice.on_ai_ready())
         self.update()
@@ -241,7 +245,7 @@ class View(object):
         self.set('status', self._voice.on_last_session_data(last_session))
         self.set('epoch', "%04d" % last_session.epochs)
         self.set('uptime', last_session.duration)
-        self.set('kali_uptime', '00:00:00')
+        self.set('run_uptime', '00:00:00')
         self.set('channel', '-')
         self.set('aps', "%d" % last_session.associated)
         self.set('shakes', '%d (%s)' % (last_session.handshakes, \
@@ -255,8 +259,8 @@ class View(object):
         self.set('status', self._voice.on_last_session_data(last_session))
         self.set('epoch', "%04d" % last_session.epochs)
         self.set('uptime', last_session.duration)
-        if self._agent is not None and hasattr(self._agent, 'kali_session_duration'):
-            self.set('kali_uptime', self._agent.kali_session_duration())
+        if self._agent is not None and hasattr(self._agent, 'tool_run_duration'):
+            self.set('run_uptime', self._agent.tool_run_duration())
         self.set('channel', '-')
         self.set('aps', "%d" % last_session.associated)
         self.set('shakes', '%d (%s)' % (last_session.handshakes, \

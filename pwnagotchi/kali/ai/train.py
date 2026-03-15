@@ -211,7 +211,17 @@ class AsyncTrainer(object):
 
     def on_ai_ready(self):
         self._view.on_ai_ready()
+        if hasattr(self, '_refresh_ui_mode_label'):
+            self._refresh_ui_mode_label()
+            logging.info("[kali] AI ready -> mode badge K-AI")
         plugins.on('ai_ready', self)
+
+    def _set_training_mode_badge(self, legacy_label):
+        if hasattr(self, 'mode') and getattr(self, 'mode', None) == 'kali' and hasattr(self, '_refresh_ui_mode_label'):
+            logging.info("[kali] suppressed legacy %s mode badge write", legacy_label.strip())
+            self._refresh_ui_mode_label()
+            return
+        self._view.set("mode", legacy_label)
 
     def on_ai_best_reward(self, r):
         logging.info("[ai] best reward so far: %s" % r)
@@ -256,10 +266,10 @@ class AsyncTrainer(object):
                         if os.path.isfile(self._nn_path):
                             back = "%s.bak" % self._nn_path
                             os.replace(self._nn_path, back)
-                        self._view.set("mode", "  ai")
+                        self._set_training_mode_badge("  ai")
                         self._model.learn(total_timesteps=epochs_per_episode, callback=self.on_ai_training_step)
                         self._save_ai()
-                        self._view.set("mode", "  AI")
+                        self._set_training_mode_badge("  AI")
                     except Exception as e:
                         logging.exception("[ai] error while training (%s)", e)
                     finally:

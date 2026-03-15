@@ -40,6 +40,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
 
         self._started_at = time.time()
         self._kali_session_started_at = time.time()
+        self._tool_run_started_at = None
         self._filter = None if not config['main']['filter'] else re.compile(config['main']['filter'])
         self._supported_channels = utils.iface_channels(config['main']['iface'])
         self._allowed_channels = utils.iface_channels(config['main']['iface'], disabled=False)
@@ -96,6 +97,21 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
     def runtime_state(self):
         return str(self._runtime_mode or 'stopped')
 
+    def _refresh_ui_mode_label(self):
+        if not self._view or self.mode != 'kali':
+            return
+        ai_enabled = bool(self._config.get('ai', {}).get('enabled', False))
+        ai_ready = bool(
+            ai_enabled
+            and self._active_tool_id
+            and self._runtime_mode == 'active'
+            and not self._ai_pause
+            and self._model is not None
+        )
+        badge = 'K-AI' if ai_ready else 'KALI'
+        self._view.set('mode', badge)
+        logging.info("[kali] mode badge -> %s", badge)
+
     def _set_bootstrap_status(self, text, face=None):
         message = str(text or '').strip()
         if not message:
@@ -104,6 +120,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
         if not self._view:
             return
         try:
+            self._refresh_ui_mode_label()
             self._view.set('status', message)
             if face is not None:
                 self._view.set('face', face)
@@ -118,6 +135,23 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
     def kali_session_duration(self):
         started_at = float(self._kali_session_started_at or time.time())
         elapsed = max(int(time.time() - started_at), 0)
+        hours = elapsed // 3600
+        minutes = (elapsed % 3600) // 60
+        seconds = elapsed % 60
+        return "%02d:%02d:%02d" % (hours, minutes, seconds)
+
+    def _start_tool_run_timer(self, tool_id):
+        self._tool_run_started_at = time.time()
+        logging.info("[kali] tool run timer started for %s", tool_id or 'unknown')
+
+    def _clear_tool_run_timer(self):
+        self._tool_run_started_at = None
+        logging.info("[kali] tool run timer cleared for manual mode")
+
+    def tool_run_duration(self):
+        if self._tool_run_started_at is None:
+            return "00:00:00"
+        elapsed = max(int(time.time() - float(self._tool_run_started_at)), 0)
         hours = elapsed // 3600
         minutes = (elapsed % 3600) // 60
         seconds = elapsed % 60
@@ -211,6 +245,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
         else:
             self.state = self.STATE_STOPPED
         logging.info("[kali] runtime mode: %s", self._runtime_mode)
+        self._refresh_ui_mode_label()
 
     def _sync_env_actions(self):
         if self._model is None or getattr(self._model, 'env', None) is None:
@@ -285,6 +320,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
             self._set_runtime_mode('active')
             self._ai_pause = False
             if self._view:
+                self._refresh_ui_mode_label()
                 self._view.set('status', 'KALI: ready')
                 self._view.set('face', faces.HAPPY)
                 self._view.update(force=True)
@@ -299,6 +335,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
             self._set_runtime_mode('stopped')
             self._ai_pause = True
             self._reset_kali_session_timer()
+            self._clear_tool_run_timer()
             return {'ok': True}
 
         logging.info("[kali] stopping active tool %s", tool_id)
@@ -313,6 +350,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
         self._sync_env_actions()
         self._set_runtime_mode('stopped')
         self._reset_kali_session_timer()
+        self._clear_tool_run_timer()
         if persist:
             self._save_last_tool_id(None)
         if self._view:
@@ -378,6 +416,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
             self._set_active_actions()
             self._sync_env_actions()
             self._set_runtime_mode('stopped')
+            self._clear_tool_run_timer()
             return up
 
         if persist:
@@ -388,8 +427,10 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
             self.start_ai()
 
         self._set_runtime_mode('active')
+        self._start_tool_run_timer(self._active_tool_id)
         self._ai_pause = False
         if self._view:
+            self._refresh_ui_mode_label()
             self._view.set('status', 'KALI: ready')
             self._view.set('face', faces.HAPPY)
             self._view.update(force=True)
@@ -512,6 +553,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
         self._started = True
         self._reset_kali_session_timer()
         self._auto_stop.clear()
+        self._refresh_ui_mode_label()
 
         try:
             self.set_starting()
@@ -529,9 +571,11 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
                 if not up.get('ok', False):
                     raise RuntimeError("failed to load boot tool %s: %s" % (self._active_tool_id, up.get('error', 'unknown')))
                 self._set_runtime_mode('active')
+                self._start_tool_run_timer(self._active_tool_id)
             else:
                 self._toolbox.deactivate_tool(context=self._tool_runtime_context())
                 self._set_runtime_mode('stopped')
+                self._clear_tool_run_timer()
 
             self._save_last_tool_id(self._active_tool_id)
             logging.info("[kali] boot tool=%s (actions=%d)", self._active_tool_id, len(self._tool_actions))
@@ -547,6 +591,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
                 self._set_bootstrap_status("KALI: bootstrapping AI...", faces.SMART)
                 logging.info("[kali] ai.enabled=true and tool active -> starting RL loop")
                 self.start_ai()
+                self._refresh_ui_mode_label()
             else:
                 if ai_enabled and not tool_active:
                     logging.info("[kali] ai.enabled=true but no active tool -> autonomous idle until tool is enabled")
@@ -554,6 +599,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
                     logging.info("[kali] ai.enabled=false -> starting autonomous loop")
                 self._start_auto_mode()
 
+            self._refresh_ui_mode_label()
             self._set_bootstrap_status("KALI: ready", faces.HAPPY)
             self.set_ready()
         except Exception as exc:
@@ -564,6 +610,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
         self._event_stop.set()
         self._ai_pause = True
         self._reset_kali_session_timer()
+        self._clear_tool_run_timer()
 
         client = self._active_tool_client()
         if client and hasattr(client, 'running'):
@@ -578,6 +625,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
         self._active_tool_id = None
         self._set_active_actions()
         self._set_runtime_mode('stopped')
+        self._refresh_ui_mode_label()
 
     def _start_auto_mode(self):
         if self._auto_thread and self._auto_thread.is_alive():
