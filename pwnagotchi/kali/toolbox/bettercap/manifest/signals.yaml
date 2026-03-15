@@ -1,0 +1,83 @@
+sources:
+
+  kernel_logs:
+    type: journalctl
+    args:
+      - "-k"
+    window_seconds: 2
+
+  system_logs:
+    type: journalctl
+    args: []
+    window_seconds: 2
+
+signals:
+
+  timeout_errors:
+    source: kernel_logs
+    regex: "brcmf_.*failed.*-110"
+    kind: error
+    normalize:
+      divisor: 20
+      clamp: 1.0
+    cost_weight: 1.0
+
+  injection_errors:
+    source: system_logs
+    regex: "wifi could not inject WiFi packet.*Resource temporarily unavailable"
+    kind: error
+    normalize:
+      divisor: 50
+      clamp: 1.0
+    cost_weight: 1.2
+
+  bettercap_errors:
+    source: system_logs
+    regex: "bettercap.*error"
+    kind: error
+    normalize:
+      divisor: 10
+      clamp: 1.0
+    cost_weight: 1.3
+
+  promisc_enter:
+    source: system_logs
+    regex: "%IFACE%.*: entered promiscuous mode"
+    kind: state
+    value: 1
+
+  promisc_left:
+    source: system_logs
+    regex: "%IFACE%.*: left promiscuous mode"
+    kind: state
+    value: 0
+
+  association_event:
+    source: system_logs
+    regex: "sending association frame to .* \\(([0-9a-fA-F:]{17})"
+    kind: event
+    extract_group: 1
+
+  handshake_event:
+    source: system_logs
+    regex: "captured handshake from .*?([0-9a-fA-F:]{17})"
+    kind: event
+    extract_group: 1
+
+  ap_discovery_event:
+    source: system_logs
+    regex: "wifi\\.ap\\.new"
+    kind: event
+
+  client_discovery_event:
+    source: system_logs
+    regex: "wifi\\.client\\.new"
+    kind: event
+
+  recon_stall:
+    source: system_logs
+    regex: "wifi recon .*stalled|websocket connection failed"
+    kind: error
+    normalize:
+      divisor: 5
+      clamp: 1.0

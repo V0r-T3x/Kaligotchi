@@ -1,0 +1,12 @@
+﻿{
+  "voice.target_spotted": [
+    "Regarde qui est la: {ssid}",
+    "Nouvelle cible detectee: {ssid}",
+    "Les paquets sentent {ssid}"
+  ],
+  "voice.handshake_captured": [
+    "Handshake capture sur {ssid}",
+    "Les cles sont a nous: {ssid}",
+    "Encore un de pris: {ssid}"
+  ]
+}

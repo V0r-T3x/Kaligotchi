@@ -1,0 +1,92 @@
+# Bettercap Client bootstrap config for Kali toolbox adapter.
+client:
+  scheme: http
+  hostname: localhost
+  port: 8081
+  username: pwnagotchi
+  password: pwnagotchi
+  request_timeout: 8
+
+readiness:
+  enabled: true
+  timeout: 20
+  interval: 2
+
+# Manifest-driven local service control (shell commands).
+service:
+  start:
+    enabled: true
+    enforce_on_load: false
+    check: "systemctl is-active --quiet bettercap.service"
+    retries: 2
+    wait_timeout: 30
+    commands:
+      - "rm -f /root/.pwnagotchi-manual"
+      - "touch /root/.pwnagotchi-auto"
+      - "systemctl start bettercap.service"
+  stop:
+    enabled: true
+    commands:
+      - "systemctl stop bettercap.service"
+  restart:
+    enabled: true
+    commands:
+      - "rm -f /root/.pwnagotchi-manual"
+      - "touch /root/.pwnagotchi-auto"
+      - "systemctl restart bettercap.service"
+
+# Legacy startup fallback (kept for compatibility).
+startup:
+  auto_start: true
+  commands:
+    - "events.clear"
+    - "set wifi.interface {iface}"
+    - "set wifi.ap.ttl {ap_ttl}"
+    - "set wifi.sta.ttl {sta_ttl}"
+    - "set wifi.rssi.min {min_rssi}"
+    - "set wifi.handshakes.file {handshakes_path}"
+    - "set wifi.handshakes.aggregate false"
+    - "wifi.recon on"
+
+lifecycle:
+  load:
+    verify:
+      api_ready:
+        enabled: true
+        timeout: 20
+        interval: 2
+      monitor_interface:
+        enabled: true
+        timeout: 60
+        interval: 1
+        start_cmd_key: mon_start_cmd
+    commands:
+      - "events.clear"
+      - "set wifi.interface {iface}"
+      - "set wifi.ap.ttl {ap_ttl}"
+      - "set wifi.sta.ttl {sta_ttl}"
+      - "set wifi.rssi.min {min_rssi}"
+      - "set wifi.handshakes.file {handshakes_path}"
+      - "set wifi.handshakes.aggregate false"
+      - "wifi.recon on"
+
+  unload:
+    commands:
+      - "wifi.recon off"
+      - "wifi.clear"
+      - "events.clear"
+
+  restart:
+    commands:
+      - "wifi.recon off"
+      - "wifi.recon on"
+
+defaults:
+  iface: mon0
+  ap_ttl: 300
+  sta_ttl: 300
+  min_rssi: -80
+  handshakes_path: /root/handshakes
+  mon_start_cmd: ""
+  channel: 1
+  channels_csv: "1,6,11"

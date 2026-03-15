@@ -8,7 +8,8 @@ import logging
 import prctl
 
 import pwnagotchi.plugins as plugins
-import pwnagotchi.ai as ai
+import pwnagotchi.kali.ai as ai
+import pwnagotchi.kali.ai.gym as ai_gym
 
 
 class Stats(object):
@@ -46,7 +47,8 @@ class Stats(object):
             if training:
                 self.epochs_trained += 1
 
-        self.save()
+        if best_r or worst_r or (self.epochs_lived % 10 == 0):
+            self.save()
 
         if best_r:
             self._receiver.on_ai_best_reward(reward)
@@ -66,7 +68,7 @@ class Stats(object):
 
     def save(self):
         with self._lock:
-            logging.info("[ai] saving %s" % self.path)
+            logging.debug("[ai] saving %s" % self.path)
 
             data = json.dumps({
                 'born_at': self.born_at,
@@ -89,19 +91,44 @@ class Stats(object):
 
 
 class AsyncTrainer(object):
+    @staticmethod
+    def _resolve_kali_brains_root(config):
+        kali_cfg = config.get('kali', {}) if isinstance(config, dict) else {}
+        brains_cfg = kali_cfg.get('brains', {}) if isinstance(kali_cfg, dict) else {}
+        root = brains_cfg.get('path', '/root/brains') if isinstance(brains_cfg, dict) else '/root/brains'
+        return str(root or '/root/brains')
+
     def __init__(self, config):
         self._config = config
         self._model = None
         self._is_training = False
         self._training_epochs = 0
+        self._ai_pause = False
+        self._primal_enabled = bool(self._config.get('ai', {}).get('primal', False))
         
-        self._nn_path = self._config['ai']['path']
-        if self._config['ai'].get('primal', False):
+        self._brains_root_path = self._resolve_kali_brains_root(self._config)
+
+        self._nn_path = os.path.join(self._brains_root_path, 'default', 'brain.nn')
+        if self._primal_enabled:
             primal_nn_path = os.path.join(os.path.dirname(self._nn_path), 'primal.nn')
             #if os.path.exists(primal_nn_path):
             #    os.remove(primal_nn_path)
             self._nn_path = primal_nn_path
-        self._stats = Stats("%s.json" % os.path.splitext(self._nn_path)[0], self, self._config['ai'].get('primal', False))
+
+        os.makedirs(os.path.dirname(self._nn_path), exist_ok=True)
+        self._stats = Stats(os.path.join(os.path.dirname(self._nn_path), 'brain.json'), self, self._primal_enabled)
+        if self._primal_enabled and not ai_gym.PRIMAL:
+            logging.warning("[ai] ai.primal=true but gym wrapper did not enter primal mode; model path still forced to primal.nn")
+
+    def configure_brain_path(self, nn_path):
+        if not nn_path:
+            return
+
+        self._nn_path = nn_path
+        if self._primal_enabled:
+            self._nn_path = os.path.join(os.path.dirname(self._nn_path), 'primal.nn')
+        os.makedirs(os.path.dirname(self._nn_path), exist_ok=True)
+        self._stats = Stats(os.path.join(os.path.dirname(self._nn_path), 'brain.json'), self, self._primal_enabled)
 
     def set_training(self, training, for_epochs=0):
         self._is_training = training
@@ -123,21 +150,21 @@ class AsyncTrainer(object):
 
     def _save_ai(self):
         logging.info("[ai] saving model to %s ..." % self._nn_path)
+        os.makedirs(os.path.dirname(self._nn_path), exist_ok=True)
         temp = "%s.tmp" % self._nn_path
         self._model.save(temp)
         os.replace(temp, self._nn_path)
 
     def on_ai_step(self):
-        self._model.env.render()
-
-        if self._is_training:
-            self._save_ai()
-
+        # Avoid calling VecEnv.render() from inside env.step() execution path.
+        # Rendering is handled by on_ai_training_step callback.
         self._stats.on_epoch(self._epoch.data(), self._is_training)
 
     def on_ai_training_step(self, _locals, _globals):
         self._model.env.render()
         plugins.on('ai_training_step', self, _locals, _globals)
+        # SB3 callback must return True to keep training.
+        return True
 
     def on_ai_policy(self, new_params):
         # Get bias from the environment
@@ -210,10 +237,17 @@ class AsyncTrainer(object):
             epochs_per_episode = self._config['ai']['epochs_per_episode']
 
             obs = None
+            force_initial_training = True
             while True:
+                if self._ai_pause:
+                    time.sleep(0.1)
+                    continue
                 self._model.env.render()
                 # enter in training mode?
-                if random.random() > self._config['ai']['laziness']:
+                should_train = force_initial_training or (random.random() > self._config['ai']['laziness'])
+                if should_train:
+                    if force_initial_training:
+                        logging.info("[ai] forcing initial training cycle")
                     logging.info("[ai] learning for %d epochs ..." % epochs_per_episode)
                     prctl.set_name("ai: training")
                     try:
@@ -224,27 +258,37 @@ class AsyncTrainer(object):
                             os.replace(self._nn_path, back)
                         self._view.set("mode", "  ai")
                         self._model.learn(total_timesteps=epochs_per_episode, callback=self.on_ai_training_step)
+                        self._save_ai()
                         self._view.set("mode", "  AI")
                     except Exception as e:
                         logging.exception("[ai] error while training (%s)", e)
                     finally:
+                        force_initial_training = False
                         self.set_training(False)
                         prctl.set_name("ai: pwning")
                         try:
                             obs = self._model.env.reset()
-                        except Exception:
+                        except Exception as e:
+                            logging.exception("[ai] env.reset() failed after training (%s)", e)
                             obs = None
                 # init the first time
                 elif obs is None:
+                    logging.info("[ai] skipping training this cycle (laziness gate), running inference")
                     try:
                         obs = self._model.env.reset()
-                    except Exception:
+                    except Exception as e:
+                        logging.exception("[ai] env.reset() failed (%s)", e)
                         obs = None
 
                 # run the inference
                 if obs is not None:
                     try:
                         action, _ = self._model.predict(obs)
-                        obs, _, _, _ = self._model.env.step(action)
-                    except Exception:
+                        step_out = self._model.env.step(action)
+                        if isinstance(step_out, tuple):
+                            obs = step_out[0]
+                        else:
+                            obs = None
+                    except Exception as e:
+                        logging.exception("[ai] inference step failed (%s)", e)
                         obs = None

@@ -1,0 +1,73 @@
+stress:
+
+  sources:
+
+    io_pressure:
+      max: 1.0
+      weight: 1.0
+
+    interaction_failures:
+      max: 1.0
+      weight: 1.2
+
+    thermal_pressure:
+      max: 1.0
+      weight: 1.0
+
+    latency_pressure:
+      max: 1.0
+      weight: 1.0
+
+    module_instability:
+      max: 1.0
+      weight: 1.3
+
+  aggregation: max
+  clamp: 1.0
+
+# -------------------------
+
+risk:
+
+  sources:
+
+    execution_timeout:
+      max: 1.0
+      weight: 1.0
+
+    blindness:
+      max: 1.0
+      weight: 1.2
+
+    detection_risk:
+      max: 1.0
+      weight: 1.5
+
+  aggregation: max
+  clamp: 1.0
+
+# -------------------------
+
+friction:
+
+  frustration:
+    formula: "(interaction_attempts - interaction_success) / 10.0"
+    weight: 0.5
+
+  boredom:
+    source: familiarity_index
+    weight: 0.3
+
+# -------------------------
+
+interaction_regulation:
+
+  baseline_limits:
+    min_interaction_scale: 0.2
+    panic_interaction_scale: 0.01
+    error_panic_threshold: 5
+
+  cooldown_scaling:
+    pressure_formula: "(interaction_pressure * 2.0) + (latency_pressure * 2.0)"
+    disruption_multiplier: 2.5
+    interaction_multiplier: 1.0

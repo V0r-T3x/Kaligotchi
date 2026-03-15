@@ -142,6 +142,8 @@ ai.params.epsilon = 0.00001
 ai.params.verbose = 1
 ai.params.lr_schedule = "constant"
 
+kali.perception_memory = 10
+
 personality.advertise = true
 personality.deauth = true
 personality.associate = true

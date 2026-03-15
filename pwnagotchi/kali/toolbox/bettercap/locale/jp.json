@@ -1,0 +1,12 @@
+﻿{
+  "voice.target_spotted": [
+    "{ssid} o hakken",
+    "Atarashii targeto: {ssid}",
+    "Paketto no nioi wa {ssid}"
+  ],
+  "voice.handshake_captured": [
+    "{ssid} no handshake o kakuto",
+    "Kagi wa {ssid}",
+    "Mata hitotsu {ssid}"
+  ]
+}

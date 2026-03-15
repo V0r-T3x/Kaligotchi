@@ -1,0 +1,203 @@
+﻿# =========================
+# Tool Identity
+# =========================
+id: bettercap
+name: Bettercap Network Engine
+version: "1.1.0"
+description: >
+  Network reconnaissance and packet interaction engine.
+  Command execution is driven via pwnagotchi.kali.client.Client.run().
+
+author: V0rT3x
+license: GPL-3.0-or-later
+category: network
+
+runtime:
+  language: python
+  entrypoint: tool.py
+  working_directory: /toolbox/bettercap/
+  virtualenv: true
+  requires_root: true
+  sandboxed: false
+
+dependencies:
+  system:
+    - bettercap
+    - libpcap-dev
+    - iw
+    - iproute2
+  python:
+    - pyyaml
+    - numpy
+    - requests
+    - websockets
+  hardware:
+    - wifi_adapter_monitor_mode
+
+compatibility:
+  os:
+    - debian
+    - kali
+  arch:
+    - armv7
+    - arm64
+    - amd64
+
+ai_interface:
+  brains_root: /root/brains
+  reflex_file: reflex.pkl
+  brain_file: brain.nn
+  observation_space: network_scan
+  action_space: bettercap_commands
+  reward_model: manifest/reward.yaml
+  cost_model: manifest/cost.yaml
+
+recovery:
+  enabled: true
+  restart_signal: restart_recommended
+  failure_threshold: 3
+  cooldown_seconds: 90
+  deauth_window_size: 20
+  deauth_window_min_attempts: 6
+  deauth_failure_ratio_threshold: 0.8
+  restart_signal_cooldown_seconds: 120
+  injection_restart_threshold: 10
+
+capabilities:
+  - wifi_scan
+  - handshake_capture
+  - ble_scan
+  - packet_sniffing
+  - mitm
+
+commands_manifest: manifest/commands.yaml
+client_manifest: manifest/client.yaml
+
+risk_profile:
+  privilege_level: high
+  network_intrusive: true
+  legal_sensitive: true
+  requires_explicit_activation: true
+
+lifecycle:
+  on_install: install-deps
+  on_setup: setup-libpcap-compat
+  on_build: build-bettercap
+  on_uninstall: uninstall
+  on_clean: clean
+
+resource_profile:
+  cpu_priority: high
+  memory_limit_mb: 512
+  disk_usage_mb: 200
+  expected_runtime: long
+
+outputs:
+  events:
+    - handshake_captured
+    - ap_detected
+    - client_detected
+  metrics:
+    - packets_per_second
+    - signal_strength
+    - channel_utilization
+voice:
+  target_spotted:
+    - "Look who's here: {ssid}"
+    - "Fresh prey detected: {ssid}"
+    - "Packets smell like {ssid}"
+    - "Hello {ssid}, let's dance."
+  handshake_captured:
+    - "Got the handshake from {ssid}"
+    - "Keys to the kingdom: {ssid}"
+    - "Another one bites the dust: {ssid}"
+  assoc_sent:
+    - "Association sent to {ssid}"
+    - "Probing {ssid} now"
+  deauth_sent:
+    - "Deauth launched on channel {channel}"
+    - "Kicking {target_mac} off channel {channel}"
+  deauth_ineffective:
+    - "Deauth fizzled on {target_mac}"
+    - "Target ignored the shove"
+  channel_locked:
+    - "Channel locked to {channel}"
+    - "Pinned radio to channel {channel}"
+  channel_scan_focus:
+    - "Focus locked on {channels_csv}"
+    - "Scan narrowed to {channels_csv}"
+    - "Looking around..."
+  recon_started:
+    - "Recon sweep is live"
+    - "Recon pipeline engaged"
+  recon_stopped:
+    - "Recon halted"
+    - "Recon pipeline paused"
+  recon_restarted:
+    - "Recon pipeline restarted"
+    - "Recon reset and scanning"
+  state_cleared:
+    - "State cache cleared"
+    - "Radio memory flushed"
+  events_synced:
+    - "Event backlog synced"
+    - "Event queue flushed"
+  radio_recovering:
+    - "Radio choking, backing off"
+    - "Recovery loop engaged"
+  resource_unavailable:
+    - "Radio resource unavailable"
+    - "Injection path is jammed"
+  timeout:
+    - "Command timed out"
+    - "Bettercap stalled on command"
+  tool_paused:
+    - "Bettercap paused, runtime preserved"
+  tool_resumed:
+    - "Bettercap resumed, runtime preserved"
+  tool_unloaded:
+    - "Bettercap unloaded, runtime destroyed"
+
+voice_faces:
+  handshake_captured:
+    - HAPPY
+  target_spotted:
+    - LOOK_R_HAPPY
+  assoc_sent:
+    sequence:
+      - INTENSE
+      - GRATEFUL
+  deauth_sent:
+    - COOL
+  deauth_ineffective:
+    - DEMOTIVATED
+  channel_locked:
+    - LOOK_R
+  channel_scan_focus:
+    sequence:
+      - LOOK_R_HAPPY
+      - LOOK_L_HAPPY
+  recon_started:
+    - AWAKE
+  recon_stopped:
+    - SLEEP2
+  recon_restarted:
+    - INTENSE
+  state_cleared:
+    - INTENSE
+  events_synced:
+    - SMART
+  radio_recovering:
+    - BROKEN
+  resource_unavailable:
+    - BROKEN
+  timeout:
+    - BROKEN
+  tool_paused:
+    sequence:
+      - SLEEP
+      - SLEEP2
+  tool_resumed:
+    - AWAKE
+  tool_unloaded:
+    - SLEEP

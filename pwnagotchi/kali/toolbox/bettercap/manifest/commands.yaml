@@ -1,0 +1,139 @@
+commands:
+
+  start_recon:
+    description: Start Bettercap WiFi recon module.
+    capability: exploration
+    intent: discover
+    ai_exposed: false
+    runs:
+      - "wifi.recon on"
+    may_emit_errors:
+      - execution_timeout
+      - module_crash
+
+  stop_recon:
+    description: Stop Bettercap WiFi recon module.
+    capability: control
+    intent: pause
+    ai_exposed: false
+    runs:
+      - "wifi.recon off"
+    may_emit_errors:
+      - execution_timeout
+
+  explore_environment:
+    description: Keep recon running and widen scan focus without hard resets.
+    capability: exploration
+    intent: discover
+    runs:
+      - "wifi.recon on"
+    cooldown_seconds: 15
+    cooldown_group: recon_refresh
+    may_emit_errors:
+      - execution_timeout
+      - visibility_loss
+      - module_crash
+
+  focus_context:
+    description: Focus scanning on a specific channel list.
+    capability: optimization
+    intent: focus
+    runs:
+      - "wifi.recon.channel {channels_csv}"
+    cooldown_seconds: 12
+    cooldown_group: channel_focus
+    may_emit_errors:
+      - invalid_target
+      - execution_timeout
+
+  set_channel:
+    description: Set a single active recon channel.
+    capability: optimization
+    intent: focus
+    runs:
+      - "wifi.recon.channel {channel}"
+    cooldown_seconds: 10
+    cooldown_group: channel_focus
+    may_emit_errors:
+      - invalid_target
+      - execution_timeout
+
+  interact_with_target:
+    description: Send association frame to target MAC.
+    capability: interaction
+    intent: engage
+    runs:
+      - "wifi.assoc {target_mac}"
+    required_context:
+      - target_mac
+    may_emit_errors:
+      - invalid_target
+      - resource_unavailable
+      - execution_timeout
+      - injection_failure
+
+  force_state_change:
+    description: Send deauth frame to target MAC.
+    capability: disruption
+    intent: provoke
+    runs:
+      - "wifi.deauth {target_mac}"
+    required_context:
+      - target_mac
+    may_emit_errors:
+      - invalid_target
+      - resource_unavailable
+      - execution_timeout
+      - injection_failure
+
+  clear_state:
+    description: Clear Bettercap WiFi state cache.
+    capability: maintenance
+    intent: reset
+    runs:
+      - "wifi.clear"
+    cooldown_seconds: 60
+    cooldown_group: disruptive_reset
+    may_emit_errors:
+      - execution_timeout
+
+  restart_recon:
+    description: Restart Bettercap recon pipeline.
+    capability: maintenance
+    intent: recover
+    ai_exposed: false
+    runs:
+      - "wifi.recon off"
+      - "wifi.recon on"
+    cooldown_seconds: 45
+    cooldown_group: recon_restart
+    may_emit_errors:
+      - execution_timeout
+      - module_crash
+
+  sync_events:
+    description: Clear Bettercap event backlog.
+    capability: maintenance
+    intent: sync
+    runs:
+      - "events.clear"
+    cooldown_seconds: 45
+    cooldown_group: disruptive_reset
+    may_emit_errors:
+      - execution_timeout
+
+  apply_runtime_profile:
+    description: Apply runtime Bettercap wifi settings from context/defaults.
+    capability: maintenance
+    intent: configure
+    ai_exposed: false
+    runs:
+      - "set wifi.interface {iface}"
+      - "set wifi.ap.ttl {ap_ttl}"
+      - "set wifi.sta.ttl {sta_ttl}"
+      - "set wifi.rssi.min {min_rssi}"
+      - "set wifi.handshakes.file {handshakes_path}"
+      - "set wifi.handshakes.aggregate false"
+    may_emit_errors:
+      - execution_timeout
+      - module_crash

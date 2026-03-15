@@ -1,4 +1,4 @@
-#!/home/pwnagotchi/.venv/bin/python3
+#!/opt/pwnagotchi/venv/bin/python3
 import logging
 import argparse
 import time
@@ -7,6 +7,7 @@ import sys
 import toml
 import prctl
 import operator
+import os
 
 import pwnagotchi
 from pwnagotchi import utils
@@ -108,6 +109,26 @@ def do_auto_mode(agent):
             else:
                 logging.exception("main loop exception (%s)", e)
 
+def do_kali_mode(agent):
+    logging.info("entering kali mode (Dual-Layer Brain) ...")
+    agent.mode = 'kali'
+    agent.start()
+    # Initialize your dual-layer brain logic here
+    # This loop allows tool switching without a full process restart
+    while True:
+        try:
+
+            #time.sleep(5)
+            if grid.is_connected():
+                plugins.on('internet_available', agent)
+            # Logic to switch between tools and their respective brains
+            # agent.switch_tool('tool_name') 
+            #plugins.on('kali_iteration', agent)
+            time.sleep(1)
+        except Exception as e:
+            logging.exception("kali loop exception (%s)", e)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser = plugins_cmd.add_parsers(parser)
@@ -121,6 +142,7 @@ if __name__ == '__main__':
                         help='If this file exists, configuration will be merged and this will override default values.')
 
     parser.add_argument('--manual', dest="do_manual", action="store_true", default=False, help="Manual mode.")
+    parser.add_argument('--kali', dest="do_kali", action="store_true", default=False, help="Kali mode.")
     parser.add_argument('--skip-session', dest="skip_session", action="store_true", default=False,
                         help="Skip last session parsing in manual mode.")
 
@@ -157,6 +179,7 @@ if __name__ == '__main__':
 
     from pwnagotchi.identity import KeyPair
     from pwnagotchi.agent import Agent
+    from pwnagotchi.kali.agent import Agent as KAgent
     from pwnagotchi.ui import fonts
     from pwnagotchi.ui.display import Display
     from pwnagotchi import grid
@@ -177,7 +200,10 @@ if __name__ == '__main__':
         do_clear(display)
         sys.exit(0)
 
-    agent = Agent(view=display, config=config, keypair=KeyPair(view=display))
+    if args.do_kali:
+        agent = KAgent(view=display, config=config, keypair=KeyPair(view=display))
+    else:
+        agent = Agent(view=display, config=config, keypair=KeyPair(view=display))
 
     def usr1_handler(*unused):
         logging.info('Received USR1 singal. Restart process ...')
@@ -185,7 +211,11 @@ if __name__ == '__main__':
 
     signal.signal(signal.SIGUSR1, usr1_handler)
 
-    if args.do_manual:
+    if args.do_kali:
+        do_kali_mode(agent)
+    elif args.do_manual:
         do_manual_mode(agent)
     else:
         do_auto_mode(agent)
+
+

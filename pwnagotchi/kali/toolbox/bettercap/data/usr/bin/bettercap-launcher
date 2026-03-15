@@ -15,9 +15,7 @@ fi
 
 /usr/bin/monstart
 
-if [ -f /root/.pwnagotchi-manual ]; then
-  /usr/local/bin/bettercap -no-colors -caplet pwnagotchi-manual -iface ${PWNY_MON_IFACE}
-elif [ -f /root/.pwnagotchi-kali ]; then
+if [ -f /root/.pwnagotchi-kali ]; then
   /usr/local/bin/bettercap -no-colors -caplet pwnagotchi-auto -iface ${PWNY_MON_IFACE}
 elif is_auto_mode_no_delete; then
   /usr/local/bin/bettercap -no-colors -caplet pwnagotchi-auto -iface ${PWNY_MON_IFACE}

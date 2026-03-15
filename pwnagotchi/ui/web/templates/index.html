@@ -6,34 +6,94 @@
 {% endblock %}
 
 {% block script %}
-
 window.onload = function() {
     var image = document.getElementById("ui");
-    var link = document.getElementById("touch_ui_link");
-    link.href = "/clickui/" + image.offsetWidth+ "x" + image.offsetHeight;
-
+    var select = document.getElementById("tool-select");
+    var pauseButton = document.getElementById("tool-pause-btn");
+    var resumeButton = document.getElementById("tool-resume-btn");
+    var stopButton = document.getElementById("tool-stop-btn");
+    var switchButton = document.getElementById("tool-switch-btn");
+    var status = document.getElementById("kali-tool-status");
+    var runtimeMode = document.getElementById("kali-runtime-mode");
+    var csrfToken = document.getElementById("kali-tool-csrf");
     function updateImage() {
         image.src = image.src.split("?")[0] + "?" + new Date().getTime();
-	link.href = "/clickui/" + image.offsetWidth+ "x" + image.offsetHeight;
+
+    }
+    function renderKaliState(state) {
+        if (!status || !runtimeMode || !select) {
+            return;
+        }
+        var activeTool = state.active_tool || "none";
+        var mode = state.runtime_state || "stopped";
+        runtimeMode.textContent = mode;
+        status.textContent = state.status_text || "No active tool, runtime stopped";
+
+        if (activeTool !== "none") {
+            select.value = activeTool;
+        }
+
+        pauseButton.disabled = mode !== "active";
+        resumeButton.disabled = mode !== "paused";
+        stopButton.disabled = mode === "stopped";
+        switchButton.disabled = false;
+    }
+
+    function postKaliAction(url, payload) {
+        return fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrfToken.value
+            },
+            body: JSON.stringify(payload || {})
+        }).then(function(response) {
+            return response.json().then(function(data) {
+                if (!response.ok || !data.ok) {
+                    throw new Error(data.error || "request failed");
+                }
+                renderKaliState(data);
+                return data;
+            });
+        }).catch(function(error) {
+            status.textContent = error.message;
+        });
+    }
+
+    if (switchButton && pauseButton && resumeButton && stopButton && select && csrfToken) {
+        renderKaliState({
+            active_tool: "{{ active_tool }}",
+            runtime_state: "{{ kali_runtime_state }}",
+            status_text: "{% if kali_runtime_state == 'active' %}{{ active_tool }} active{% elif kali_runtime_state == 'paused' %}{{ active_tool }} paused, runtime preserved{% else %}No active tool, runtime stopped{% endif %}"
+        });
+
+        pauseButton.onclick = function() {
+            postKaliAction("/kali/tool/pause");
+        };
+
+        resumeButton.onclick = function() {
+            postKaliAction("/kali/tool/resume");
+        };
+
+        stopButton.onclick = function() {
+            postKaliAction("/kali/tool/stop");
+        };
+
+        switchButton.onclick = function() {
+            var selectedTool = select.value;
+            if (!selectedTool) {
+                status.textContent = "Select a tool to switch";
+                return;
+            }
+            postKaliAction("/kali/tool/switch", { tool: selectedTool });
+        };
     }
     setInterval(updateImage, 1000);
 }
-
-window.onresize = function() {
-    var img = document.getElementById("ui");
-    if (img.naturalWidth == 0) {
-	return
-    }
-    var link = document.getElementById("touch_ui_link");
-    link.href = "/clickui/" + img.offsetWidth+ "x" + img.offsetHeight;
-}
-
 {% endblock %}
 
 {% block content %}
-<div style="transform: scale(1.0); transform-origin: top left;">
-<a href="/clickui" id='touch_ui_link'><img class="ui-image pixelated" src="/ui" id="ui" style="-webkit-user-select:none;" ismap></a>
-</div>
+<img class="ui-image pixelated" src="/ui" id="ui"/>
 <div data-role="navbar">
 	<ul>
 		<li>
@@ -58,6 +118,32 @@ window.onresize = function() {
 				<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
 			</form>
 		</li>
+		<li>
+			<form class="action" method="post" action="/restart_kali"
+          onsubmit="return confirm('This will restart the service in KALI mode, continue?');">
+				<input type="submit" class="button ui-btn ui-corner-all" value="Restart in KALI mode"/>
+				<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+			</form>
+		</li>
 	</ul>
 </div>
+{% if is_kali %}
+<div class="kali-tool-switcher ui-body ui-body-a ui-corner-all">
+    <input type="hidden" id="kali-tool-csrf" value="{{ csrf_token() }}"/>
+    <label for="tool-select">KALI Tool</label>
+    <select id="tool-select" data-role="none">
+        {% for tool in kali_tools %}
+        <option value="{{ tool }}" {% if active_tool == tool %}selected="selected"{% endif %}>{{ tool }}</option>
+        {% endfor %}
+    </select>
+    <div class="kali-tool-controls">
+        <button id="tool-pause-btn" class="ui-btn ui-corner-all">Pause</button>
+        <button id="tool-resume-btn" class="ui-btn ui-corner-all">Resume</button>
+        <button id="tool-stop-btn" class="ui-btn ui-corner-all">Stop</button>
+        <button id="tool-switch-btn" class="ui-btn ui-corner-all">Switch</button>
+    </div>
+    <div><strong>Runtime:</strong> <span id="kali-runtime-mode">{{ kali_runtime_state }}</span></div>
+    <div id="kali-tool-status">{% if kali_runtime_state == 'active' %}{{ active_tool }} active{% elif kali_runtime_state == 'paused' %}{{ active_tool }} paused, runtime preserved{% else %}No active tool, runtime stopped{% endif %}</div>
+</div>
+{% endif %}
 {% endblock %}

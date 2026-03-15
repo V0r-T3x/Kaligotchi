@@ -17,6 +17,8 @@ blink_led 10 &
 
 if is_auto_mode; then
   /usr/local/bin/pwnagotchi
+elif is_kali_mode; then
+  /usr/local/bin/pwnagotchi --kali
 else
   /usr/local/bin/pwnagotchi --manual
 fi

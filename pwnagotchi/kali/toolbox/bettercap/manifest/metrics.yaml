@@ -1,0 +1,62 @@
+metrics:
+
+  io_pressure:
+    source: io_wait
+    transform:
+      type: linear
+      max: 100
+
+  injection_pressure:
+    source: injection_errors
+    transform:
+      type: linear
+      max: 50
+
+  thermal_pressure:
+    source: temperature
+    transform:
+      type: threshold
+      safe: 50
+      range: 30
+
+  latency_pressure:
+    source: command_latency
+    transform:
+      type: clamp
+      max: 1.0
+
+  driver_instability:
+    source: bettercap_errors
+    transform:
+      type: linear
+      max: 10
+
+  blindness:
+    source: blind_for_epochs
+    transform:
+      type: linear
+      max: 10
+
+  timeout_pressure:
+    source: timeout_errors
+    transform:
+      type: linear
+      max: 20
+
+  visibility_score:
+    source: targets_visible
+    transform:
+      type: linear
+      max: 10
+
+  activity_score:
+    source: environment_activity
+    transform:
+      type: clamp
+      max: 1.0
+
+  recon_stall_pressure:
+    source: recon_stall
+    transform:
+      type: clamp
+      max: 1.0

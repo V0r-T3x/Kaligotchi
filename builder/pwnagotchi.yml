@@ -693,6 +693,7 @@
       dest: /usr/local/share/bettercap/caplets/pwnagotchi-auto.cap
       force: true
     ignore_errors: true
+    when: pwnagotchi_overwrite_auto_caplet | default(false) | bool
 
   - name: add HDMI powersave to rc.local
     blockinfile:

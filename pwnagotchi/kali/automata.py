@@ -1,12 +1,9 @@
 import logging
-import os
-import time
 
 import pwnagotchi.plugins as plugins
-from pwnagotchi.ai.epoch import Epoch
+from pwnagotchi.kali.ai.epoch import Epoch
 
 
-# basic mood system
 class Automata(object):
     def __init__(self, config, view):
         self._config = config
@@ -15,13 +12,10 @@ class Automata(object):
 
     def _on_miss(self, who):
         logging.info("it looks like %s is not in range anymore :/", who)
-        self._epoch.track(miss=True)
+        self._epoch.track_interaction(success=False, error=True)
         self._view.on_miss(who)
 
     def _on_error(self, who, e):
-        # when we're trying to associate or deauth something that is not in range anymore
-        # (if we are moving), we get the following error from bettercap:
-        # error 400: 50:c7:bf:2e:d3:37 is an unknown BSSID or it is in the association skip list.
         if 'is an unknown BSSID' in str(e):
             self._on_miss(who)
         else:
@@ -42,15 +36,16 @@ class Automata(object):
         support_factor = total_encounters / bond_factor
         return support_factor >= factor
 
-    # triggered when it's a sad/bad day but you have good friends around ^_^
     def set_grateful(self):
-        self._view.on_grateful()
+        if hasattr(self, 'set_mood'):
+            self.set_mood('grateful')
         plugins.on('grateful', self)
 
     def set_lonely(self):
         if not self._has_support_network_for(1.0):
             logging.info("unit is lonely")
-            self._view.on_lonely()
+            if hasattr(self, 'set_mood'):
+                self.set_mood('lonely')
             plugins.on('lonely', self)
         else:
             logging.info("unit is grateful instead of lonely")
@@ -60,7 +55,8 @@ class Automata(object):
         factor = self._epoch.inactive_for / self._config['personality']['bored_num_epochs']
         if not self._has_support_network_for(factor):
             logging.warning("%d epochs with no activity -> bored", self._epoch.inactive_for)
-            self._view.on_bored()
+            if hasattr(self, 'set_mood'):
+                self.set_mood('bored')
             plugins.on('bored', self)
         else:
             logging.info("unit is grateful instead of bored")
@@ -70,7 +66,8 @@ class Automata(object):
         factor = self._epoch.inactive_for / self._config['personality']['sad_num_epochs']
         if not self._has_support_network_for(factor):
             logging.warning("%d epochs with no activity -> sad", self._epoch.inactive_for)
-            self._view.on_sad()
+            if hasattr(self, 'set_mood'):
+                self.set_mood('sad')
             plugins.on('sad', self)
         else:
             logging.info("unit is grateful instead of sad")
@@ -79,7 +76,8 @@ class Automata(object):
     def set_angry(self, factor):
         if not self._has_support_network_for(factor):
             logging.warning("%d epochs with no activity -> angry", self._epoch.inactive_for)
-            self._view.on_angry()
+            if hasattr(self, 'set_mood'):
+                self.set_mood('angry')
             plugins.on('angry', self)
         else:
             logging.info("unit is grateful instead of angry")
@@ -87,7 +85,8 @@ class Automata(object):
 
     def set_excited(self):
         logging.warning("%d epochs with activity -> excited", self._epoch.active_for)
-        self._view.on_excited()
+        if hasattr(self, 'set_mood'):
+            self.set_mood('excited')
         plugins.on('excited', self)
 
     def set_rebooting(self):
@@ -97,10 +96,10 @@ class Automata(object):
     def wait_for(self, t, sleeping=True):
         plugins.on('sleep' if sleeping else 'wait', self, t)
         self._view.wait(t, sleeping)
-        self._epoch.track(sleep=True, inc=t)
+        self._epoch.track_sleep(t)
 
     def is_stale(self):
-        return self._epoch.num_missed > self._config['personality']['max_misses_for_recon']
+        return self._epoch.num_errors > self._config['personality']['max_misses_for_recon']
 
     def any_activity(self):
         return self._epoch.any_activity
@@ -109,29 +108,25 @@ class Automata(object):
         logging.debug("agent.next_epoch()")
 
         was_stale = self.is_stale()
-        did_miss = self._epoch.num_missed
+        did_errors = self._epoch.num_errors
 
         self._epoch.next()
 
-        # after X misses during an epoch, set the status to lonely or angry
         if was_stale:
-            factor = did_miss / self._config['personality']['max_misses_for_recon']
+            factor = did_errors / self._config['personality']['max_misses_for_recon']
             if factor >= 2.0:
                 self.set_angry(factor)
             else:
-                logging.warning("agent missed %d interactions -> lonely", did_miss)
+                logging.warning("agent had %d interaction errors -> lonely", did_errors)
                 self.set_lonely()
-        # after X times being bored, the status is set to sad or angry
         elif self._epoch.sad_for:
             factor = self._epoch.inactive_for / self._config['personality']['sad_num_epochs']
             if factor >= 2.0:
                 self.set_angry(factor)
             else:
                 self.set_sad()
-        # after X times being inactive, the status is set to bored
         elif self._epoch.bored_for:
             self.set_bored()
-        # after X times being active, the status is set to happy / excited
         elif self._epoch.active_for >= self._config['personality']['excited_num_epochs']:
             self.set_excited()
         elif self._epoch.active_for >= 5 and self._has_support_network_for(5.0):
@@ -139,23 +134,10 @@ class Automata(object):
 
         plugins.on('epoch', self, self._epoch.epoch - 1, self._epoch.data())
 
-        if self._epoch.blind_for%10 == 2:
-            logging.info("two blind epochs -> restarting wifi.recon...", self._epoch.blind_for)
-            self.run('wifi.recon off')
-            self.run('wifi.recon on')
-        if self._epoch.blind_for and self._epoch.blind_for%5 == 0:
-            logging.info("%d epochs without visible access points -> restarting bettercap...", self._epoch.blind_for)
-            try:
-                self.run('wifi.recon off')
-                time.sleep(1)
-                self._reset_wifi_settings()
-            except Exception as e:
-                logging.exception("Restarting bettercap: %s" % (e))
-                os.system("systemctl restart bettercap")
-
-        if self._epoch.blind_for >= self._config['main']['mon_max_blind_epochs']:
-            logging.critical("%d epochs without visible access points -> rebooting ...", self._epoch.blind_for)
-            self.run('wifi.recon off')
+        if self._epoch.no_targets_for >= self._config['main']['mon_max_blind_epochs']:
+            logging.critical(
+                "%d epochs without visible targets -> rebooting ...",
+                self._epoch.no_targets_for,
+            )
             self._save_recovery_data()
             self._restart()
-            self._epoch.blind_for = 0

@@ -1,0 +1,22 @@
+weights:
+
+  interaction_success: 1.0
+  exploration_gain: 0.3
+  environment_diversity: 0.2
+
+  visibility_loss: -0.4
+  missed_interactions: -0.3
+  inactivity: -0.2
+
+  resource_overuse: -0.2
+  detection_risk: -0.6
+
+ratios:
+  normalize_by_interactions: true
+  normalize_by_time: true
+
+emotional_feedback:
+  boredom_threshold: 5
+  frustration_threshold: 5
+  boredom_penalty: -0.1
+  frustration_penalty: -0.2

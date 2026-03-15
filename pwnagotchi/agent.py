@@ -16,6 +16,8 @@ import pwnagotchi.plugins as plugins
 from pwnagotchi.ui.web.server import Server
 from pwnagotchi.automata import Automata
 from pwnagotchi.log import LastSession
+
+
 from pwnagotchi.bettercap import Client
 from pwnagotchi.mesh.utils import AsyncAdvertiser
 from pwnagotchi.ai.train import AsyncTrainer
@@ -63,6 +65,7 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         self.last_session = LastSession(self._config)
         self.current_session = LastSession(self._config)
         self.mode = 'auto'
+        self._last_connection_errors = 0
 
         
 
@@ -113,7 +116,14 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
             now = time.time()
             if now - self._last_ticker_ts > 1.0:
                 if hasattr(self, '_epoch') and self._epoch:
-                     self._reflex.observe(self._epoch.data())
+                     data = self._epoch.data()
+                     try:
+                         s = self.session()
+                         if s:
+                             data['gps'] = s['gps']
+                     except Exception:
+                         pass
+                     self._reflex.observe(data)
                 self._last_ticker_ts = now
             
             bias = self._reflex.bias()
@@ -143,11 +153,12 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
 
         while has_mon is False:
             s = self.session()
-            for iface in s['interfaces']:
-                if iface['name'] == mon_iface:
-                    logging.info("found monitor interface: %s", iface['name'])
-                    has_mon = True
-                    break
+            if s:
+                for iface in s['interfaces']:
+                    if iface['name'] == mon_iface:
+                        logging.info("found monitor interface: %s", iface['name'])
+                        has_mon = True
+                        break
 
             if has_mon is False:
                 if mon_start_cmd is not None and mon_start_cmd != '':
@@ -182,6 +193,15 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
             except Exception:
                 logging.info("waiting for bettercap API to be available ...")
                 time.sleep(1)
+
+    def next_epoch(self):
+        if self._epoch.epoch > 0:
+             current_errors = getattr(self, '_connection_errors', 0)
+             delta = current_errors - self._last_connection_errors
+             self._last_connection_errors = current_errors
+             if delta > 0:
+                 self._epoch.track(bc_error=True, inc=delta)
+        super().next_epoch()
 
     def start(self):
       try:
@@ -238,15 +258,16 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         aps = []
         try:
             s = self.session(sess="session/wifi")
-            plugins.on("unfiltered_ap_list", self, s['aps'])
-            for ap in s['aps']:
-                if ap['encryption'] == '' or ap['encryption'] == 'OPEN':
-                    continue
-                elif ap['hostname'].lower() not in whitelist \
-                        and ap['mac'].lower() not in whitelist \
-                        and ap['mac'][:8].lower() not in whitelist:
-                    if self._filter_included(ap):
-                        aps.append(ap)
+            if s:
+                plugins.on("unfiltered_ap_list", self, s['aps'])
+                for ap in s['aps']:
+                    if ap['encryption'] == '' or ap['encryption'] == 'OPEN':
+                        continue
+                    elif ap['hostname'].lower() not in whitelist \
+                            and ap['mac'].lower() not in whitelist \
+                            and ap['mac'][:8].lower() not in whitelist:
+                        if self._filter_included(ap):
+                            aps.append(ap)
         except Exception as e:
             logging.exception("Error while getting acces points (%s)", e)
 
@@ -371,6 +392,27 @@ class Agent(Client, Automata, AsyncAdvertiser, AsyncTrainer):
         self.set_rebooting()
         self._save_recovery_data()
         pwnagotchi.reboot()
+
+    def _restart(self, mode='AUTO'):
+        if not os.path.exists("/sys/class/net/%s" % self._config['main']['iface']):
+            self.start_monitor_mode()
+            time.sleep(5)
+            if not os.path.exists("/sys/class/net/%s" % self._config['main']['iface']):
+                logging.error("monitor interface not found, rebooting ...")
+                try:
+                    with open('/var/log/reflex.log', 'a') as f:
+                        f.write(f"{datetime.datetime.now()} - [REFLEX] Monitor interface not found after restart attempt. Rebooting to fix adapter.\n")
+                except Exception:
+                    pass
+                self._reboot()
+                return
+        try:
+            with open('/var/log/reflex.log', 'a') as f:
+                f.write(f"{datetime.datetime.now()} - [REFLEX] Agent restarting (mode: {mode}).\n")
+        except Exception:
+            pass
+        self._save_recovery_data()
+        pwnagotchi.restart(mode)
 
     def _save_recovery_data(self):
         logging.warning("writing recovery data to %s ...", RECOVERY_DATA_FILE)

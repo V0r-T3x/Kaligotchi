@@ -1,0 +1,22 @@
+error_categories:
+
+  execution_timeout:
+    description: "Command did not complete in time"
+
+  resource_unavailable:
+    description: "Tool failed due to system resource issue"
+
+  invalid_target:
+    description: "Target not valid anymore"
+
+  injection_failure:
+    description: "Packet injection failed"
+
+  module_crash:
+    description: "Underlying module stopped running"
+
+  visibility_loss:
+    description: "Scanner returned empty data unexpectedly"
+
+  high_latency:
+    description: "Command latency above threshold"

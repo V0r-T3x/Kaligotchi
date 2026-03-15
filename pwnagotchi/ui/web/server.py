@@ -14,6 +14,7 @@ from flask_wtf.csrf import CSRFProtect
 
 from pwnagotchi.ui.web.handler import Handler
 
+
 class Server:
     def __init__(self, agent, config):
         self._config = config['web']
@@ -34,10 +35,12 @@ class Server:
         if self._address is not None:
             web_path = os.path.dirname(os.path.realpath(__file__))
 
-            app = Flask(__name__,
-                        static_url_path='',
-                        static_folder=os.path.join(web_path, 'static'),
-                        template_folder=os.path.join(web_path, 'templates'))
+            app = Flask(
+                __name__,
+                static_url_path='',
+                static_folder=os.path.join(web_path, 'static'),
+                template_folder=os.path.join(web_path, 'templates'),
+            )
 
             app.secret_key = secrets.token_urlsafe(256)
 
@@ -49,6 +52,8 @@ class Server:
 
             logging.info("web ui available at http://%s:%d/" % (self._address, self._port))
 
-            app.run(host=self._address, port=self._port, debug=False)
+            # Do not kill external processes if the port is already in use.
+            # Let Flask fail normally so service behavior is explicit.
+            app.run(host=self._address, port=self._port, debug=False, use_reloader=False)
         else:
             logging.info("could not get ip of usb0, video server not starting")

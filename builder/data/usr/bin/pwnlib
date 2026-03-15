@@ -143,6 +143,11 @@ is_auto_mode() {
     return 1
   fi
 
+  if [ -f /root/.pwnagotchi-kali ]; then
+    # remove the override file if found
+    return 1
+  fi
+
   # check override file first
   if [ -f /root/.pwnagotchi-auto ]; then
     # remove the override file if found
@@ -166,6 +171,11 @@ is_auto_mode() {
 
 # returns 0 if conditions for AUTO mode are met
 is_auto_mode_no_delete() {
+  # Kali mode must always run the auto caplet semantics for tool-driven control.
+  if [ -f /root/.pwnagotchi-kali ]; then
+    return 0
+  fi
+
   # check override file first
   if [ -f /root/.pwnagotchi-manual ]; then
     return 1
@@ -188,6 +198,16 @@ is_auto_mode_no_delete() {
 
   # no override, but none of the interfaces is up -> AUTO
   return 0
+}
+
+# returns 0 if conditions for KALI mode are met
+is_kali_mode() {
+  if [ -f /root/.pwnagotchi-kali ]; then
+    # Keep the file if you want the state to persist across restarts, 
+    # or rm -rf it here if it's a one-time trigger like the others.
+    return 0
+  fi
+  return 1
 }
 
 # check if we need to decrypt something

@@ -2,8 +2,6 @@ import _thread
 import logging
 import random
 import time
-import prctl
-
 from threading import Lock
 
 from PIL import ImageDraw
@@ -18,10 +16,8 @@ from pwnagotchi.ui.components import *
 from pwnagotchi.ui.state import State
 from pwnagotchi.voice import Voice
 
-import RPi.GPIO as GPIO
-
-WHITE = 0xffffff     # WHITE is background
-BLACK = 0x040000     # BLACK is foreground
+WHITE = 0xff
+BLACK = 0x00
 ROOT = None
 
 
@@ -36,28 +32,21 @@ class View(object):
         self._render_cbs = []
         self._config = config
         self._canvas = None
-        self._web_canvas = None
         self._frozen = False
         self._lock = Lock()
         self._voice = Voice(lang=config['main']['lang'])
         self._implementation = impl
+        self._face_sequence = []
+        self._face_sequence_index = 0
+        self._face_sequence_fps = 4.0
+        self._face_sequence_looping = True
+        self._face_sequence_deadline = None
+        self._next_face_frame_at = 0.0
         self._layout = impl.layout()
-        self._rotation = config['ui']['display'].get('rotation',0)
-        if (self._rotation/90)%2 == 0:
-            self._width = self._layout['width']
-            self._height = self._layout['height']
-        else:
-            # when rotated 90 or 270, swap width and height
-            self._width = self._layout['height']
-            self._height = self._layout['width']
-
-        # pull from configuration
-        colormode = '1' if not 'colormode' in self._config['ui'] else self._config['ui']['colormode']
-        if 'foregroundcolor' in self._config['ui']: pwnagotchi.ui.view.BLACK = self._config['ui']['foregroundcolor']
-        if 'backgroundcolor' in self._config['ui']: pwnagotchi.ui.view.WHITE = self._config['ui']['backgroundcolor']
-        self._foregroundcolor = BLACK
-        self._backgroundcolor = WHITE
-
+        self._width = self._layout['width']
+        self._height = self._layout['height']
+        uptime_pos = self._layout['uptime']
+        kali_uptime_pos = (uptime_pos[0] - 8, self._layout['name'][1])
         self._state = State(state={
             'channel': LabeledValue(color=BLACK, label='CH', value='00', position=self._layout['channel'],
                                     label_font=fonts.Bold,
@@ -69,6 +58,9 @@ class View(object):
             'uptime': LabeledValue(color=BLACK, label='UP', value='00:00:00', position=self._layout['uptime'],
                                    label_font=fonts.Bold,
                                    text_font=fonts.Medium),
+            'kali_uptime': LabeledValue(color=BLACK, label='RUN', value='00:00:00', position=kali_uptime_pos,
+                                        label_font=fonts.Bold,
+                                        text_font=fonts.Medium),
 
             'line1': Line(self._layout['line1'], color=BLACK),
             'line2': Line(self._layout['line2'], color=BLACK),
@@ -111,22 +103,11 @@ class View(object):
 
         ROOT = self
 
-    def set_rotation(self, rot):
-        self._rotation = rot
-        config['ui']['display']['rotation'] = rot
-        if (self._rotation/90)%2 == 0:
-            self._width = self._layout['width']
-            self._height = self._layout['height']
-        else:
-            # when rotated 90 or 270, swap width and height
-            self._width = self._layout['height']
-            self._height = self._layout['width']
-
     def set_agent(self, agent):
         self._agent = agent
 
     def has_element(self, key):
-        self._state.has_element(key)
+        return self._state.has_element(key)
 
     def add_element(self, key, elem):
         self._state.add_element(key, elem)
@@ -148,16 +129,14 @@ class View(object):
             self._render_cbs.append(cb)
 
     def _refresh_handler(self):
-        try:
-            prctl.set_name("ui refresh")
-        except Exeception as e:
-            logging.exception(repr(e))
-
         delay = 1.0 / self._config['ui']['fps']
         while True:
             try:
+                self._tick_face_sequence()
+                if self._agent is not None and hasattr(self._agent, 'kali_session_duration'):
+                    self.set('kali_uptime', self._agent.kali_session_duration())
                 name = self._state.get('name')
-                self.set('name', name.rstrip('-').strip() if '-' in name else (name + ' -'))
+                self.set('name', name.rstrip('█').strip() if '█' in name else (name + ' █'))
                 self.update()
             except Exception as e:
                 logging.warning("non fatal error while updating view: %s" % e)
@@ -165,32 +144,85 @@ class View(object):
             time.sleep(delay)
 
     def set(self, key, value):
+        if key == 'face_sequence':
+            self._set_face_sequence(value)
+            return
+        if key == 'face_sequence_fps':
+            try:
+                self._face_sequence_fps = max(0.1, float(value))
+            except (TypeError, ValueError):
+                self._face_sequence_fps = 4.0
+            return
+        if key == 'face_sequence_duration':
+            if value in (None, ''):
+                self._face_sequence_deadline = None
+            else:
+                try:
+                    self._face_sequence_deadline = time.time() + max(0.0, float(value))
+                except (TypeError, ValueError):
+                    self._face_sequence_deadline = None
+            return
+        if key == 'face_sequence_looping':
+            self._face_sequence_looping = bool(value)
+            return
+        if key == 'face':
+            self._stop_face_sequence()
         self._state.set(key, value)
 
     def get(self, key):
         return self._state.get(key)
 
-    def set_backgroundcolor(self, color):
-        pwnagotchi.ui.view.WHITE = color
-        self._backgroundcolor = pwnagotchi.ui.view.WHITE
-        self._state.set("_WHITE", color)
+    def _set_face_sequence(self, sequence):
+        if not isinstance(sequence, (list, tuple)):
+            self._stop_face_sequence()
+            return
 
-    def get_background_color(self):
-        return self._backgroundcolor
+        frames = [frame for frame in sequence if frame not in (None, '')]
+        if len(frames) < 2:
+            self._stop_face_sequence()
+            return
 
-    def get_default_backgroundcolor(self):
-        return WHITE if not 'backgroundcolor' in self._config['ui'] else self._config['ui']['backgroundcolor']
+        if self._face_sequence:
+            logging.debug("stopping previous face sequence animation")
 
-    def set_foregroundcolor(self, color):
-        pwnagotchi.ui.view.BLACK = color
-        self._foregroundcolor = pwnagotchi.ui.view.BLACK
-        self._state.set("_BLACK", color)
+        self._face_sequence = list(frames)
+        self._face_sequence_index = 0
+        self._next_face_frame_at = time.time() + (1.0 / max(0.1, self._face_sequence_fps))
+        logging.debug("starting face sequence animation frames=%s fps=%s", len(self._face_sequence), self._face_sequence_fps)
+        self._state.set('face', self._face_sequence[0])
 
-    def get_foreground_color(self):
-        return self._foregroundcolor
+    def _stop_face_sequence(self):
+        if self._face_sequence:
+            logging.debug("stopping previous face sequence animation")
+        self._face_sequence = []
+        self._face_sequence_index = 0
+        self._face_sequence_deadline = None
+        self._next_face_frame_at = 0.0
 
-    def get_default_foregroundcolor(self):
-        return BLACK if not 'foregroundcolor' in self._config['ui'] else self._config['ui']['foregroundcolor']
+    def _tick_face_sequence(self):
+        if len(self._face_sequence) < 2:
+            return
+
+        now = time.time()
+        if self._face_sequence_deadline is not None and now >= self._face_sequence_deadline:
+            self._stop_face_sequence()
+            return
+
+        if now < self._next_face_frame_at:
+            return
+
+        next_index = self._face_sequence_index + 1
+        if next_index >= len(self._face_sequence):
+            if not self._face_sequence_looping:
+                self._stop_face_sequence()
+                return
+            next_index = 0
+
+        self._face_sequence_index = next_index
+        frame = self._face_sequence[self._face_sequence_index]
+        self._next_face_frame_at = now + (1.0 / max(0.1, self._face_sequence_fps))
+        logging.debug("sequence frame update index=%s frame=%s", self._face_sequence_index, frame)
+        self._state.set('face', frame)
 
     def on_starting(self):
         self.set('status', self._voice.on_starting() + ("\n(v%s)" % pwnagotchi.__version__))
@@ -209,6 +241,22 @@ class View(object):
         self.set('status', self._voice.on_last_session_data(last_session))
         self.set('epoch', "%04d" % last_session.epochs)
         self.set('uptime', last_session.duration)
+        self.set('kali_uptime', '00:00:00')
+        self.set('channel', '-')
+        self.set('aps', "%d" % last_session.associated)
+        self.set('shakes', '%d (%s)' % (last_session.handshakes, \
+                                        utils.total_unique_handshakes(self._config['bettercap']['handshakes'])))
+        self.set_closest_peer(last_session.last_peer, last_session.peers)
+        self.update()
+
+    def on_kali_mode(self, last_session):
+        self.set('mode', 'KALI')
+        self.set('face', faces.COOL)
+        self.set('status', self._voice.on_last_session_data(last_session))
+        self.set('epoch', "%04d" % last_session.epochs)
+        self.set('uptime', last_session.duration)
+        if self._agent is not None and hasattr(self._agent, 'kali_session_duration'):
+            self.set('kali_uptime', self._agent.kali_session_duration())
         self.set('channel', '-')
         self.set('aps', "%d" % last_session.associated)
         self.set('shakes', '%d (%s)' % (last_session.handshakes, \
@@ -302,9 +350,9 @@ class View(object):
 
     def wait(self, secs, sleeping=True):
         was_normal = self.is_normal()
-        part = secs/3.0
+        part = secs / 10.0
 
-        for step in range(0, 3):
+        for step in range(0, 10):
             # if we weren't in a normal state before going
             # to sleep, keep that face and status on for
             # a while, otherwise the sleep animation will
@@ -314,13 +362,11 @@ class View(object):
                     if secs > 1:
                         self.set('face', faces.SLEEP)
                         self.set('status', self._voice.on_napping(int(secs)))
-                        plugins.on('sleep', self, secs)
                     else:
                         self.set('face', faces.SLEEP2)
                         self.set('status', self._voice.on_awakening())
                 else:
                     self.set('status', self._voice.on_waiting(int(secs)))
-                    plugins.on('wait', self, secs)
                     good_mood = self._agent.in_good_mood()
                     if step % 2 == 0:
                         self.set('face', faces.LOOK_R_HAPPY if good_mood else faces.LOOK_R)
@@ -430,29 +476,15 @@ class View(object):
             state = self._state
             changes = state.changes(ignore=self._ignore_changes)
             if force or len(changes):
-                colormode = '1' if not 'colormode' in self._config['ui'] else self._config['ui']['colormode']
-
-                self._canvas = Image.new(colormode, (self._width, self._height), self._backgroundcolor)
+                self._canvas = Image.new('1', (self._width, self._height), WHITE)
                 drawer = ImageDraw.Draw(self._canvas)
-                drawer.fontmode = "1"
 
                 plugins.on('ui_update', self)
 
                 for key, lv in state.items():
-                    try:
-                        lv.draw(self._canvas, drawer)
-                    except Exception as e:
-                        logging.exception("Error with %s: %s" % (key, e))
+                    lv.draw(self._canvas, drawer)
 
-                try:
-                    if self._config['ui'].get('show_click_zones', False):
-                        for (shape, coords, key, link) in self._agent._view._state.get_map_actions():
-                            bbox = list(map(int,coords.split(',')))
-                            drawer.rectangle(bbox, outline='Red')
-                except Exception as e:
-                    logging.exception(e)
-
-                self._web_canvas = self._canvas.copy()
+                web.update_frame(self._canvas)
 
                 for cb in self._render_cbs:
                     cb(self._canvas)

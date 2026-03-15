@@ -107,6 +107,7 @@ class GPS(plugins.Plugin):
         self.status = '-'
         self.socat_thread = threading.Thread(target=self.run_socat)
         self.agent = None
+        self.last_coordinates = None
 
     def get_ip_address(self, interface):
         try:
@@ -156,27 +157,16 @@ class GPS(plugins.Plugin):
         )
 
     def run_socat(self):
+        cmd = [
+            "socat",
+            f"UDP-RECVFROM:{self.listen_port},fork,reuseaddr,bind={self.listen_ip}",
+            f"GOPEN:{self.write_virtual_serial}"
+        ]
+
         while not self.stop_event.is_set():
-            self.socat_process = subprocess.Popen(
-                ["socat", f"UDP-RECVFROM:{self.listen_port},reuseaddr,bind={self.listen_ip}", "-"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-
+            self.socat_process = subprocess.Popen(cmd)
             self.set_status('C')
-  
-            with open(self.write_virtual_serial, 'w') as serial_port:
-                for line in self.socat_process.stdout:
-                    if self.stop_event.is_set():
-                        break
-                    serial_port.write(line)
-                    serial_port.flush()  # Ensure the data is written immediately
-                    self.status = 'C'
-
             self.socat_process.wait()
-            if self.stop_event.is_set():
-                break
 
         self.set_status('-')
 
@@ -302,9 +292,10 @@ class GPS(plugins.Plugin):
 
         if self.agent:
             coordinates = self.agent.session().get('gps')
-            logging.debug(f"UI update GPS: {coordinates}")
             if coordinates and coordinates.get("Latitude") is not None and coordinates.get("Longitude") is not None:
-                ui.set("latitude", f"{coordinates['Latitude']:.4f}")
-                ui.set("longitude", f"{coordinates['Longitude']:.4f}")
-                if coordinates.get("Altitude") is not None:
-                    ui.set("altitude", f"{coordinates['Altitude']:.1f}m")
+                if self.last_coordinates != coordinates:
+                    ui.set("latitude", f"{coordinates['Latitude']:.4f}")
+                    ui.set("longitude", f"{coordinates['Longitude']:.4f}")
+                    if coordinates.get("Altitude") is not None:
+                        ui.set("altitude", f"{coordinates['Altitude']:.1f}m")
+                    self.last_coordinates = coordinates

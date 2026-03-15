@@ -11,6 +11,23 @@ _name = None
 config = None
 _cpu_stats = {}
 
+
+def _set_boot_mode_marker(mode):
+    mode = (mode or '').upper()
+
+    # Keep mode markers mutually exclusive.
+    os.system("rm -f /root/.pwnagotchi-auto /root/.pwnagotchi-manual /root/.pwnagotchi-kali")
+
+    if mode == 'AUTO':
+        os.system("touch /root/.pwnagotchi-auto")
+    elif mode == 'MANU':
+        os.system("touch /root/.pwnagotchi-manual")
+    elif mode == 'KALI':
+        # Kali relies on auto-caplet behavior for bettercap bootstrap.
+        os.system("touch /root/.pwnagotchi-kali")
+        os.system("touch /root/.pwnagotchi-auto")
+
+
 def set_name(new_name):
     if new_name is None:
         return
@@ -134,10 +151,8 @@ def restart(mode):
     prctl.set_name("pwny restart %s" % mode)
     logging.warning("restarting in %s mode ...", mode)
 
-    if mode == 'AUTO':
-        os.system("touch /root/.pwnagotchi-auto")
-    else:
-        os.system("touch /root/.pwnagotchi-manual")
+    if mode is not None:
+        _set_boot_mode_marker(mode)
 
     #os.system("service bettercap restart")
     os.system("service pwnagotchi restart")
@@ -157,10 +172,8 @@ def reboot(mode=None):
         # give it some time to refresh the ui
         time.sleep(10)
 
-    if mode == 'AUTO':
-        os.system("touch /root/.pwnagotchi-auto")
-    elif mode == 'MANU':
-        os.system("touch /root/.pwnagotchi-manual")
+    if mode is not None:
+        _set_boot_mode_marker(mode)
 
     logging.warning("syncing...")
 

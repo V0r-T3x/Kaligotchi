@@ -9,6 +9,7 @@ import json
 import os
 
 from .mobility import MobilityContext
+from .sram import ReflexSRAM
 
 try:
     import gymnasium as gym
@@ -32,7 +33,8 @@ class ReflexEnv(gym.Env):
             "timeout_errors": spaces.Discrete(10),
             "injection_errors": spaces.Discrete(10),
             "io_wait": spaces.Box(low=0, high=100, shape=(1,), dtype=np.float32),
-            "is_promiscuous": spaces.Discrete(2)
+            "is_promiscuous": spaces.Discrete(2),
+            "bc_errors": spaces.Box(low=0, high=1.0, shape=(1,), dtype=np.float32)
         })
 
         self.state = {}
@@ -50,6 +52,7 @@ class ReflexEnv(gym.Env):
         injection_errors = min(int(self.state.get('injection_errors', 0)), 9)
         io_wait = float(self.state.get('io_wait', 0.0))
         is_promiscuous = int(self.state.get('is_promiscuous', 0))
+        bc_errors = min(float(self.state.get('num_bc_errors', 0)) / 10.0, 1.0)
 
         return {
             "rssi": np.array([rssi], dtype=np.float32),
@@ -58,7 +61,8 @@ class ReflexEnv(gym.Env):
             "timeout_errors": timeout_errors,
             "injection_errors": injection_errors,
             "io_wait": np.array([io_wait], dtype=np.float32),
-            "is_promiscuous": is_promiscuous
+            "is_promiscuous": is_promiscuous,
+            "bc_errors": np.array([bc_errors], dtype=np.float32)
         }
 
     def _calculate_reflex_reward(self):
@@ -168,7 +172,7 @@ class ReflexBrain:
         self.timeout_errors = 0
         self.injection_errors = 0
         
-        self._state_file = "/root/.reflex_state.json"
+        self.sram = ReflexSRAM()
         self._baseline = {
             "safe_interaction_scale": 1.0,
             "safe_deauth_cooldown": 0.0,
@@ -189,26 +193,32 @@ class ReflexBrain:
         self._stable_ticks = 0
 
     def _load_state(self):
-        if os.path.exists(self._state_file):
+        data = self.sram.load()
+        
+        # Migration: Check legacy JSON if SRAM is empty
+        if not data and os.path.exists("/root/.reflex_state.json"):
             try:
-                with open(self._state_file, 'r') as f:
+                with open("/root/.reflex_state.json", 'r') as f:
                     data = json.load(f)
-                    # Decay across cold boots (return to default)
-                    decay = 0.95
-                    
-                    # Cooldowns: decay towards 0.0 (less delay)
-                    self._baseline["safe_deauth_cooldown"] = data.get("safe_deauth_cooldown", 0.0) * decay
-                    self._baseline["safe_assoc_cooldown"] = data.get("safe_assoc_cooldown", 0.0) * decay
-                    
-                    # Scale: decay towards 1.0 (more aggressive/less restriction)
-                    saved_scale = data.get("safe_interaction_scale", 1.0)
-                    self._baseline["safe_interaction_scale"] = 1.0 - (1.0 - saved_scale) * decay
-                    
-                    self._baseline["last_stable_pressure"] = data.get("last_stable_pressure", 0.0)
-                    
-                    logging.info(f"[Reflex] Loaded baseline state: {self._baseline}")
-            except Exception as e:
-                logging.error(f"[Reflex] Failed to load state: {e}")
+                logging.info("[Reflex] Migrated legacy state to SRAM.")
+            except Exception:
+                pass
+
+        if data:
+            # Decay across cold boots (return to default)
+            decay = 0.95
+            
+            # Cooldowns: decay towards 0.0 (less delay)
+            self._baseline["safe_deauth_cooldown"] = data.get("safe_deauth_cooldown", 0.0) * decay
+            self._baseline["safe_assoc_cooldown"] = data.get("safe_assoc_cooldown", 0.0) * decay
+            
+            # Scale: decay towards 1.0 (more aggressive/less restriction)
+            saved_scale = data.get("safe_interaction_scale", 1.0)
+            self._baseline["safe_interaction_scale"] = 1.0 - (1.0 - saved_scale) * decay
+            
+            self._baseline["last_stable_pressure"] = data.get("last_stable_pressure", 0.0)
+            
+            logging.info(f"[Reflex] Loaded baseline state: {self._baseline}")
 
     def _maybe_persist(self):
         now = time.time()
@@ -231,12 +241,9 @@ class ReflexBrain:
                 "hardware_signature": f"{self.iface}",
                 "last_update": int(now)
             }
-            try:
-                with open(self._state_file, "w") as f:
-                    json.dump(data, f)
-                self._last_save = now
-            except Exception as e:
-                logging.error(f"[Reflex] Failed to persist state: {e}")
+            
+            self.sram.save(data)
+            self._last_save = now
 
     def _body_ready(self):
         return (
@@ -305,35 +312,6 @@ class ReflexBrain:
         self._last_log_check = now
         self._cached_log_metrics = metrics
         return metrics
-    
-    def endorphin(self):
-        """
-        The 'Painkiller': Flushes the driver buffer and restarts the monitor interface
-        without killing the main Python process. Masking the firmware pain.
-        """
-        logging.warning("[Reflex] --- Triggering ENDORPHIN: Flushing Driver Constipation ---")
-        
-        try:
-            # 1. Bring the interface down to clear hardware registers
-            subprocess.run(['sudo', 'ifconfig', self.iface, 'down'], check=True)
-            time.sleep(1)
-            
-            # 2. Force-clear the nexmon/brcmfmac state if possible (optional/risky)
-            # subprocess.run(['sudo', 'modprobe', '-r', 'brcmfmac'], check=True)
-            # subprocess.run(['sudo', 'modprobe', 'brcmfmac'], check=True)
-            
-            # 3. Bring it back up
-            subprocess.run(['sudo', 'ifconfig', self.iface, 'up'], check=True)
-            
-            # 4. Kick Bettercap via SIGHUP or a specific API call to reset its internal state
-            # This acts like a 'restart' for the radio engine without a reboot.
-            subprocess.run(['sudo', 'pkill', '-HUP', 'bettercap'], check=True)
-            
-            logging.info("[Reflex] ENDORPHIN flow complete. System stabilized.")
-            return True
-        except Exception as e:
-            logging.error(f"[Reflex] ENDORPHIN failed to mask the pain: {e}")
-            return False
 
     def regulate_ticker(self, inj_rate=0.0):
         # Sane ticker behavior:
@@ -391,6 +369,7 @@ class ReflexBrain:
         observation['injection_errors'] = self.injection_errors
         observation['io_wait'] = log_metrics.get('io_wait', 0)
         observation['is_promiscuous'] = log_metrics.get('is_promiscuous', 0)
+        observation['num_bc_errors'] = log_metrics.get('num_bc_errors', 0)
 
         # Update streaks
         inj_errs = log_metrics.get('injection_errors', 0)
@@ -572,6 +551,12 @@ class ReflexBrain:
         # Apply baseline cap for interaction scale (safety ratchet)
         modifiers["interaction_scale"] = min(modifiers["interaction_scale"], self._baseline["safe_interaction_scale"])
 
+        # Panic Mode: High Bettercap error rate
+        num_bc_errors = float(self.state.get('num_bc_errors', 0))
+        if num_bc_errors > 5:
+             logging.warning("[Reflex] PANIC: High Bettercap error rate (%.1f). Suppressing interaction.", num_bc_errors)
+             modifiers["interaction_scale"] = 0.01
+
         self._current_deauth_cooldown = modifiers["deauth_cooldown"]
         self._current_assoc_cooldown = modifiers["assoc_cooldown"]
         self._current_interaction_scale = modifiers["interaction_scale"]
@@ -589,7 +574,8 @@ class ReflexBrain:
         temp = max(0.0, float(self.state.get('temperature', 40)) - 50.0) / 30.0
         # Latency > 1.0s is considered critical stress
         lat = min(self._cmd_latency, 1.0)
-        return min(1.0, max(io, inj, temp, lat))
+        bc_err = min(float(self.state.get('num_bc_errors', 0)) / 10.0, 1.0)
+        return min(1.0, max(io, inj, temp, lat, bc_err))
 
     @property
     def risk(self):
