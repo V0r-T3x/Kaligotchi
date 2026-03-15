@@ -125,7 +125,7 @@ class ApiClient(object):
         logging.error("API readiness timed out after %ss.", timeout)
         return False
 
-    async def start_websocket(self, consumer, events_path=None):
+    async def start_websocket(self, consumer, events_path=None, status_callback=None):
         events_path = events_path or self.websocket_events_path
         ws_url = self._join(self.websocket, events_path)
 
@@ -135,6 +135,11 @@ class ApiClient(object):
         while self.running:
             try:
                 async with websockets.connect(ws_url, open_timeout=10, ping_interval=60, ping_timeout=90) as ws:
+                    if callable(status_callback):
+                        try:
+                            status_callback(True, 'websocket')
+                        except Exception:
+                            logging.debug("websocket status callback failed on connect", exc_info=True)
                     backoff = 2
                     async for msg in ws:
                         if not self.running:
@@ -147,6 +152,11 @@ class ApiClient(object):
                 if not self.running:
                     break
                 self._connection_errors += 1
+                if callable(status_callback):
+                    try:
+                        status_callback(False, 'websocket')
+                    except Exception:
+                        logging.debug("websocket status callback failed on disconnect", exc_info=True)
                 logging.warning("websocket connection failed: %s. retrying in %ss", exc, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)

@@ -30,6 +30,7 @@ class ToolAdapter:
         self._loaded = False
         self.running = False
         self._mac_to_ssid: Dict[str, str] = {}
+        self._api_online = True
 
         self.client = Client(
             hostname=str(client_cfg.get('hostname', 'localhost')),
@@ -256,6 +257,48 @@ class ToolAdapter:
         })
         return payload
 
+    def _api_status_result(self, online: bool, context: Optional[Dict[str, Any]] = None, detail: str = '') -> Dict[str, Any]:
+        context = dict(context or {})
+        if online:
+            status_text = "Bettercap restored"
+            detail_text = detail or "resuming operations"
+            voice_event = 'tool_resumed'
+        else:
+            status_text = "Bettercap API unavailable"
+            detail_text = detail or "waiting for runtime..."
+            voice_event = 'tool_error'
+
+        env = {'preferred_channels': [self._active_channel or '*']}
+        payload = self._build_ui_event(voice_event, context, env=env)
+        payload['voice_context'].update({
+            'status_text': "%s\n%s" % (status_text, detail_text),
+            'status': status_text,
+            'detail': detail_text,
+        })
+        return {
+            'ok': bool(online),
+            'events': payload,
+            'ui': {'status': "%s\n%s" % (status_text, detail_text)},
+        }
+
+    def _set_api_online(self, online: bool, context: Optional[Dict[str, Any]] = None, detail: str = '') -> Optional[Dict[str, Any]]:
+        online = bool(online)
+        if self._api_online == online:
+            return None
+
+        self._api_online = online
+        if online:
+            logging.info("[bettercap.tool] api connection restored")
+        else:
+            logging.warning("[bettercap.tool] api offline detected")
+        return self._api_status_result(online, context=context, detail=detail)
+
+    def handle_api_health_change(self, online: bool, source: str = 'api', context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        detail = "resuming operations" if online else "waiting for runtime..."
+        if source == 'websocket' and not online:
+            detail = "reconnecting API..."
+        return self._set_api_online(online, context=context, detail=detail)
+
     def _build_ui_event(self, event_name: str, context: Dict[str, Any], env: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> Dict[str, Any]:
         voice_context = self._voice_context(context, env=env, error=error)
         logging.debug(
@@ -299,6 +342,7 @@ class ToolAdapter:
         self._last_connection_errors = int(getattr(self.client, '_connection_errors', 0) or 0)
         self._loaded = False
         self.running = True
+        self._api_online = True
         self._reset_session_pwnd('boot')
         return {'ok': True}
 
@@ -309,6 +353,7 @@ class ToolAdapter:
         self._deauth_window.clear()
         self._last_restart_signal_ts = 0.0
         self._last_connection_errors = int(getattr(self.client, '_connection_errors', 0) or 0)
+        self._api_online = True
 
         lifecycle = self.client_manifest.get('lifecycle') or {}
         load_spec = lifecycle.get('load') if isinstance(lifecycle, dict) else {}
@@ -370,6 +415,7 @@ class ToolAdapter:
         self._loaded = False
         self.running = False
         self._runtime_defaults = {}
+        self._api_online = False
         self._reset_session_pwnd('unload')
         logging.info("[bettercap.tool] unloaded (runtime destroyed)")
         result['events'] = self._build_ui_event('tool_unloaded', context)
@@ -395,6 +441,7 @@ class ToolAdapter:
         self._last_restart_signal_ts = 0.0
         self._last_connection_errors = int(getattr(self.client, '_connection_errors', 0) or 0)
         self._last_recon_refresh_ts = time.time()
+        self._api_online = True
         lifecycle = self.client_manifest.get('lifecycle') or {}
         restart_spec = lifecycle.get('restart') if isinstance(lifecycle, dict) else {}
         restart_spec = restart_spec if isinstance(restart_spec, dict) else {}
@@ -554,6 +601,12 @@ class ToolAdapter:
         else:
             self._api_failure_streak = 0
 
+        health_event = None
+        if self._api_failure_streak >= 3 or not env.get('session_ok', True):
+            health_event = self._set_api_online(False, context=context, detail="waiting for runtime...")
+        elif ok and env.get('session_ok', True) and connection_delta <= 0:
+            health_event = self._set_api_online(True, context=context, detail="resuming operations")
+
         recovery_cfg = self.tool_manifest.get('recovery', {}) if isinstance(self.tool_manifest.get('recovery', {}), dict) else {}
         deauth_window_min_attempts = int(recovery_cfg.get('deauth_window_min_attempts', 6) or 6)
         deauth_window_size = int(recovery_cfg.get('deauth_window_size', 20) or 20)
@@ -664,6 +717,10 @@ class ToolAdapter:
             target_mac = self._last_session_trophy_bssid or raw_hs
             events['widgets']['pwnd'] = self._build_pwnd_widget(context)
             events.update(self._build_ui_event('handshake_captured', {'ssid': trophy_name, 'target_mac': target_mac}, env=env))
+        elif not self._api_online:
+            events.update(self._api_status_result(False, context=context, detail="waiting for runtime...")['events'])
+        elif health_event is not None:
+            events.update(health_event.get('events', {}))
         elif env.get('ap_delta', 0) > 0:
             events.update(self._build_ui_event('target_spotted', {'ssid': 'nearby network'}, env=env))
         elif explicit_event:

@@ -82,14 +82,17 @@ class VoiceWidgetManager:
         context: Any,
         runtime_config: Dict[str, Any],
     ) -> bool:
-        phrases = self._resolve_phrases(tool_id, tool_spec, voice_event, runtime_config)
-        if not phrases:
-            return False
-
         face_payload = self._resolve_face_payload(tool_spec, voice_event)
         payload = dict(context) if isinstance(context, dict) else {}
-        phrase = random.choice(phrases)
-        text = self._render_phrase(phrase, payload)
+        phrases = self._resolve_phrases(tool_id, tool_spec, voice_event, runtime_config)
+        explicit_status = str(payload.get('status_text') or '').strip()
+        if phrases:
+            phrase = random.choice(phrases)
+            text = self._render_phrase(phrase, payload)
+        elif explicit_status:
+            text = explicit_status
+        else:
+            return False
 
         try:
             face = face_payload.get('face')

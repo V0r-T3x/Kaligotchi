@@ -469,6 +469,16 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
                 time.sleep(2)
                 continue
 
+            tool_id = self._active_tool_id
+            adapter = self._toolbox.adapters.get(tool_id) if tool_id else None
+
+            def _on_ws_health(online, source):
+                if not tool_id or adapter is None or not hasattr(adapter, 'handle_api_health_change'):
+                    return
+                result = adapter.handle_api_health_change(online, source=source, context=self._tool_runtime_context())
+                if isinstance(result, dict):
+                    self._toolbox.emit(tool_id, result)
+
             try:
                 client.run('events.clear', verbose_errors=False)
             except Exception:
@@ -477,7 +487,7 @@ class Agent(Automata, AsyncAdvertiser, AsyncTrainer):
             loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(client.start_websocket(self._on_tool_event))
+                loop.run_until_complete(client.start_websocket(self._on_tool_event, status_callback=_on_ws_health))
             except Exception as exc:
                 logging.warning("[kali] websocket poller reconnecting after error: %s", exc)
                 time.sleep(2)
